@@ -101,10 +101,27 @@ local function applyAntiAFK(state)
     pcall(function()
         local AutoRejoinModule = require(ReplicatedStorage.Source.Features.AutoRejoin.AutoRejoinServiceClient)
         if type(AutoRejoinModule) == "table" then
-            if state and type(AutoRejoinModule.disable) == "function" then
-                AutoRejoinModule.disable()
-            elseif not state and type(AutoRejoinModule.enable) == "function" then
-                AutoRejoinModule.enable()
+            if state then
+                -- STRAIGHT UP NUKE IT
+                -- We loop through every single function in the auto rejoin module and replace it with an empty function
+                -- This completely destroys the module's ability to run anything in the background
+                if not getgenv().OriginalAutoRejoin then
+                    getgenv().OriginalAutoRejoin = {}
+                    for k, v in pairs(AutoRejoinModule) do
+                        if type(v) == "function" then
+                            getgenv().OriginalAutoRejoin[k] = v
+                            AutoRejoinModule[k] = function() return end
+                        end
+                    end
+                end
+            else
+                -- Restore original functionality if user unchecks Anti-AFK
+                if getgenv().OriginalAutoRejoin then
+                    for k, v in pairs(getgenv().OriginalAutoRejoin) do
+                        AutoRejoinModule[k] = v
+                    end
+                    getgenv().OriginalAutoRejoin = nil
+                end
             end
         end
     end)
@@ -219,7 +236,6 @@ local function sendStatsWebhook(isInitial, currentCoins, currentGoop, deltaCoins
     local targetUrl = getgenv().StatWebhookURL ~= "" and getgenv().StatWebhookURL or getgenv().WebhookURL
     if targetUrl == "" then return end
 
-    -- Generate Discord unix timestamp format for relative time ("X minutes ago")
     local unixTime = math.floor(os.time())
     local discordTimestamp = "<t:" .. unixTime .. ":R>"
 
