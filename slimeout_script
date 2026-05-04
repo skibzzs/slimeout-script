@@ -52,11 +52,10 @@ getgenv().AutoPickup = false
 getgenv().AutoEquipBest = false
 getgenv().AutoCraft = false
 getgenv().AutoCraftDelay = 0.025
-getgenv().AutoClaimRecipes = false
 getgenv().AutoBuyZones = false
 getgenv().AutoTpZones = false
-getgenv().CenterTeleport = true -- NEW TOGGLE FOR CENTER TP
-getgenv().MaxTeleportZone = 0
+getgenv().CenterTeleport = true
+getgenv().MaxTeleportZone = 0 -- 0 means no limit
 getgenv().AutoRebirth = false
 getgenv().AutoBuyUpgrades = false
 getgenv().AutoClaimIndex = false
@@ -69,14 +68,14 @@ getgenv().AutoUseRollSpeed = false
 getgenv().AutoUseCurrency = false
 
 getgenv().WebhookURL = ""
-getgenv().StatWebhookURL = ""
+getgenv().StatWebhookURL = "" -- Separate webhook for stats
 getgenv().PingID = "nobody"
 getgenv().MinThreshold = 100000000
 getgenv().EmbedTitle = "🎉 Rare Slime Rolled! 🎉"
 getgenv().ShowUsername = false
 
 getgenv().StatTrackerEnabled = false
-getgenv().StatTrackerInterval = 15
+getgenv().StatTrackerInterval = 15 -- 15 minutes default
 
 getgenv().AntiAFK = true
 
@@ -90,7 +89,7 @@ task.spawn(function()
             pcall(function()
                 nextRoll.sendFunc()
             end)
-            task.wait(2.05)
+            task.wait(2.05) -- Strict 2-second rate limit delay between requests to never drop a roll
         else
             task.wait(0.1)
         end
@@ -160,7 +159,10 @@ local function parseMultiplier(str)
     }
 
     local mult = multipliers[suffix]
-    if not mult then return val end
+    if not mult then
+        return val
+    end
+
     return val * mult
 end
 
@@ -210,15 +212,19 @@ local function getTargetZone()
     return bestZone
 end
 
--- Used to extract exact roll count without Vide errors if possible
+-- Used to extract exact roll count without Vide errors if possible, or we will just use the current tracking if valid.
 getgenv().VideScopes = {}
+
+-- Helper to safely read from table
 local function safeRead(t, key, default)
-    if type(t) == "table" and t[key] ~= nil then return t[key] end
+    if type(t) == "table" and t[key] ~= nil then
+        return t[key]
+    end
     return default
 end
 
 -- ==============================================
--- STATS WEBHOOK
+-- STATS WEBHOOK (VIDE FIXED)
 -- ==============================================
 
 local function sendStatsWebhook(isInitial, currentCoins, currentGoop, currentRolls, deltaCoins, deltaGoop, deltaRolls, minutesPassed)
@@ -234,7 +240,7 @@ local function sendStatsWebhook(isInitial, currentCoins, currentGoop, currentRol
         embed = {
             ["title"] = "📊 Stats Tracker Started",
             ["description"] = "Tracker initialized " .. discordTimestamp .. "\n👤 **Player:** " .. playerStr,
-            ["color"] = 3447003,
+            ["color"] = 3447003, -- Blue
             ["fields"] = {
                 { ["name"] = "🪙 Initial Coins", ["value"] = formatNumberSuffix(currentCoins), ["inline"] = true },
                 { ["name"] = "🧪 Initial Goop", ["value"] = formatNumberSuffix(currentGoop), ["inline"] = true },
@@ -246,29 +252,35 @@ local function sendStatsWebhook(isInitial, currentCoins, currentGoop, currentRol
         local coinsPerMin = deltaCoins / minutesPassed
         local goopPerMin = deltaGoop / minutesPassed
         local rollsPerMin = deltaRolls / minutesPassed
+        local coinsPerHour = coinsPerMin * 60
+        local goopPerHour = goopPerMin * 60
+        local rollsPerHour = rollsPerMin * 60
 
         embed = {
             ["title"] = "📈 Stats Update",
             ["description"] = "Update sent " .. discordTimestamp .. "\n👤 **Player:** " .. playerStr,
-            ["color"] = 5763719,
+            ["color"] = 5763719, -- Green
             ["fields"] = {
                 { ["name"] = "🪙 Coins", ["value"] = formatNumberSuffix(currentCoins), ["inline"] = true },
                 { ["name"] = "💰 Earned", ["value"] = (deltaCoins >= 0 and "+" or "") .. formatNumberSuffix(deltaCoins), ["inline"] = true },
-                { ["name"] = "⚡ Coins/Hr", ["value"] = formatNumberSuffix(coinsPerMin * 60) .. "/h", ["inline"] = true },
+                { ["name"] = "⚡ Coins/Hr", ["value"] = formatNumberSuffix(coinsPerHour) .. "/h", ["inline"] = true },
 
                 { ["name"] = "🧪 Goop", ["value"] = formatNumberSuffix(currentGoop), ["inline"] = true },
                 { ["name"] = "🦠 Earned", ["value"] = (deltaGoop >= 0 and "+" or "") .. formatNumberSuffix(deltaGoop), ["inline"] = true },
-                { ["name"] = "🫧 Goop/Hr", ["value"] = formatNumberSuffix(goopPerMin * 60) .. "/h", ["inline"] = true },
+                { ["name"] = "🫧 Goop/Hr", ["value"] = formatNumberSuffix(goopPerHour) .. "/h", ["inline"] = true },
 
                 { ["name"] = "🎲 Rolls", ["value"] = formatNumberSuffix(currentRolls), ["inline"] = true },
                 { ["name"] = "🎲 Earned", ["value"] = (deltaRolls >= 0 and "+" or "") .. formatNumberSuffix(deltaRolls), ["inline"] = true },
-                { ["name"] = "🎲 Rolls/Hr", ["value"] = formatNumberSuffix(rollsPerMin * 60) .. "/h", ["inline"] = true },
+                { ["name"] = "🎲 Rolls/Hr", ["value"] = formatNumberSuffix(rollsPerHour) .. "/h", ["inline"] = true },
             },
             ["footer"] = { ["text"] = string.format("Slimeout Tracker • Over the last %d minutes", math.floor(minutesPassed)) }
         }
     end
 
-    local data = { ["content"] = "", ["embeds"] = {embed} }
+    local data = {
+        ["content"] = "", 
+        ["embeds"] = {embed}
+    }
 
     table.insert(WebhookQueue, {
         sendFunc = function()
@@ -299,6 +311,7 @@ local function startTracker()
 
         local vide = require(ReplicatedStorage.Packages.Vide)
         local getDataSource = require(ReplicatedStorage.Source.Core.UI.Sources.getDataSource)
+
         local coinsSrc, goopSrc, statsSrc
 
         local destroyScope = vide.root(function()
@@ -312,6 +325,7 @@ local function startTracker()
         lastGoop = goopSrc() or 0
         local statsTbl = statsSrc()
         lastRolls = safeRead(statsTbl, "rolls", 0)
+
         lastTick = tick()
 
         if getgenv().StatTrackerEnabled then
@@ -320,7 +334,11 @@ local function startTracker()
 
         while getgenv().StatTrackerEnabled do
             local targetTime = lastTick + (getgenv().StatTrackerInterval * 60)
-            while getgenv().StatTrackerEnabled and tick() < targetTime do task.wait(1) end
+
+            while getgenv().StatTrackerEnabled and tick() < targetTime do
+                task.wait(1)
+            end
+
             if not getgenv().StatTrackerEnabled then break end
 
             local currentCoins = coinsSrc() or 0
@@ -331,8 +349,12 @@ local function startTracker()
             local elapsedSecs = tick() - lastTick
             local elapsedMins = elapsedSecs / 60
 
+            local dCoins = currentCoins - lastCoins
+            local dGoop = currentGoop - lastGoop
+            local dRolls = currentRolls - lastRolls
+
             if elapsedMins > 0 then
-                sendStatsWebhook(false, currentCoins, currentGoop, currentRolls, currentCoins - lastCoins, currentGoop - lastGoop, currentRolls - lastRolls, elapsedMins)
+                sendStatsWebhook(false, currentCoins, currentGoop, currentRolls, dCoins, dGoop, dRolls, elapsedMins)
             end
 
             lastCoins = currentCoins
@@ -340,6 +362,7 @@ local function startTracker()
             lastRolls = currentRolls
             lastTick = tick()
         end
+
         pcall(destroyScope)
         isTrackerRunning = false
     end)
@@ -354,18 +377,35 @@ local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, im
 
     local contentStr = ""
     if getgenv().PingID ~= "" and getgenv().PingID ~= "nobody" then
-        if getgenv().PingID:lower() == "everyone" then contentStr = "@everyone" else contentStr = "<@" .. getgenv().PingID .. ">" end
+        if getgenv().PingID:lower() == "everyone" then
+            contentStr = "@everyone"
+        else
+            contentStr = "<@" .. getgenv().PingID .. ">"
+        end
     end
 
-    local titlePrefix, titleSuffix = "", ""
+    local titlePrefix = ""
+    local titleSuffix = ""
     local isMutated = mutationsStr ~= "None"
 
     if isMutated then
         local mutLower = mutationsStr:lower()
-        if string.find(mutLower, "inverted") then titlePrefix = titlePrefix .. "🌌 "; titleSuffix = " 🌌" .. titleSuffix end
-        if string.find(mutLower, "shiny") then titlePrefix = titlePrefix .. "✨ "; titleSuffix = " ✨" .. titleSuffix end
-        if string.find(mutLower, "huge") then titlePrefix = titlePrefix .. "🐘 "; titleSuffix = " 🐘" .. titleSuffix end
-        if string.find(mutLower, "big") then titlePrefix = titlePrefix .. "🦍 "; titleSuffix = " 🦍" .. titleSuffix end
+        if string.find(mutLower, "inverted") then 
+            titlePrefix = titlePrefix .. "🌌 "
+            titleSuffix = " 🌌" .. titleSuffix 
+        end
+        if string.find(mutLower, "shiny") then 
+            titlePrefix = titlePrefix .. "✨ "
+            titleSuffix = " ✨" .. titleSuffix 
+        end
+        if string.find(mutLower, "huge") then 
+            titlePrefix = titlePrefix .. "🐘 "
+            titleSuffix = " 🐘" .. titleSuffix 
+        end
+        if string.find(mutLower, "big") then 
+            titlePrefix = titlePrefix .. "🦍 "
+            titleSuffix = " 🦍" .. titleSuffix 
+        end
     end
 
     local titleMsg = "**" .. titlePrefix .. string.upper(fullName) .. titleSuffix .. "**"
@@ -385,23 +425,37 @@ local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, im
         ["footer"] = { ["text"] = "Auto Roll Logger" }
     }
 
-    local imgUrl = getRobloxImage(imageId) or getRobloxImage(backupImageId)
-    if imgUrl then embed["thumbnail"] = { ["url"] = imgUrl } end
+    local imgUrl = getRobloxImage(imageId)
+    if not imgUrl and backupImageId then
+        imgUrl = getRobloxImage(backupImageId)
+    end
 
-    local data = { ["content"] = contentStr, ["embeds"] = {embed} }
+    if imgUrl then
+        embed["thumbnail"] = { ["url"] = imgUrl }
+    end
+
+    local data = {
+        ["content"] = contentStr,
+        ["embeds"] = {embed}
+    }
+
     local reqFunc = (request or http and http.request or syn and syn.request)
-
     if reqFunc then
         local response = reqFunc({
-            Url = getgenv().WebhookURL, Method = "POST",
-            Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(data)
+            Url = getgenv().WebhookURL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(data)
         })
+
         if response and response.StatusCode == 400 and embed["thumbnail"] then
             embed["thumbnail"] = nil
             data.embeds = {embed}
             reqFunc({
-                Url = getgenv().WebhookURL, Method = "POST",
-                Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(data)
+                Url = getgenv().WebhookURL,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = HttpService:JSONEncode(data)
             })
         end
     end
@@ -458,7 +512,11 @@ MainTab:CreateToggle({
                             local oddsMultiplier = MutationsModule.getVisualOddsMultiplier(activeMutations)
 
                             local finalOdds = 1
-                            if baseOdds < 1 then finalOdds = (1 / baseOdds) * oddsMultiplier else finalOdds = baseOdds * oddsMultiplier end
+                            if baseOdds < 1 then
+                                finalOdds = (1 / baseOdds) * oddsMultiplier
+                            else
+                                finalOdds = baseOdds * oddsMultiplier
+                            end
 
                             local isMutated = MutationsModule.hasAny(activeMutations)
                             local mutationsStr = "None"
@@ -476,9 +534,13 @@ MainTab:CreateToggle({
                             local fullName = MutationsModule.getDisplayName(baseName, activeMutations)
 
                             local targetImageId = slimeData and slimeData.image or nil
-                            if MutationsModule.has(activeMutations, "inverted") and slimeData and slimeData.invertedIcon then
-                                targetImageId = slimeData.invertedIcon
+                            if MutationsModule.has(activeMutations, "inverted") then
+                                if slimeData and slimeData.invertedIcon then
+                                    targetImageId = slimeData.invertedIcon
+                                end
                             end
+
+                            local backupImageId = slimeData and slimeData.image or nil
 
                             if finalOdds >= getgenv().MinThreshold then
                                 local rollCount = 0
@@ -489,7 +551,7 @@ MainTab:CreateToggle({
 
                                 table.insert(WebhookQueue, {
                                     sendFunc = function()
-                                        sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, targetImageId, slimeData and slimeData.image or nil, rollCount)
+                                        sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, targetImageId, backupImageId, rollCount)
                                     end
                                 })
                             end
@@ -497,6 +559,7 @@ MainTab:CreateToggle({
                     end)
                     task.wait(getgenv().AutoRollDelay)
                 end
+
                 pcall(destroyScope)
             end)
         end
@@ -510,7 +573,11 @@ MainTab:CreateInput({
     Flag = "AutoRollDelay_Save",
     Callback = function(Text)
         local num = tonumber(Text)
-        if num and num >= 0 then getgenv().AutoRollDelay = num else getgenv().AutoRollDelay = 0.05 end
+        if num and num >= 0 then
+            getgenv().AutoRollDelay = num
+        else
+            getgenv().AutoRollDelay = 0.05
+        end
     end,
 })
 
@@ -541,6 +608,7 @@ MainTab:CreateToggle({
 MainTab:CreateSection("Auto Zone Purchasing & Teleport")
 
 local isAutoTpRunning = false
+local TweenService = game:GetService("TweenService")
 
 local function teleportToZoneCenter(targetZoneId)
     local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -550,51 +618,41 @@ local function teleportToZoneCenter(targetZoneId)
         -- First fire the server remote so the game thinks we belong there (prevents anti-cheat checks)
         pcall(function() ZonesServiceClient:teleportToZone(targetZoneId) end)
 
-        -- If Center Teleport is enabled, we manually override the position right after
+        -- If Center Teleport is enabled, override the position smoothly after the game loads the zone
         if getgenv().CenterTeleport then
-            task.wait(0.1) -- small yield to let server tp finish
+            task.wait(0.75) -- Give the game time to finish its own teleport so it doesn't overwrite ours
+
             local zoneFolder = workspace:FindFirstChild("Zones")
             if zoneFolder then
                 local specificZone = zoneFolder:FindFirstChild(tostring(targetZoneId))
                 if specificZone then
-                    -- We calculate the center of the decor/POI models if present
-                    local decor = specificZone:FindFirstChild("decor")
-                    local poi = specificZone:FindFirstChild("POI")
+                    local targetPos = nil
 
-                    local centerCFrame = nil
-
-                    if decor and decor:IsA("Model") and decor.PrimaryPart then
-                        centerCFrame = decor.PrimaryPart.CFrame
-                    elseif poi and poi:IsA("Model") and poi.PrimaryPart then
-                        centerCFrame = poi.PrimaryPart.CFrame
-                    else
-                        -- Fallback: Calculate bounding box of the zone children
-                        local minX, minY, minZ = math.huge, math.huge, math.huge
-                        local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
-                        local foundParts = false
-
-                        for _, desc in ipairs(specificZone:GetDescendants()) do
-                            if desc:IsA("BasePart") then
-                                foundParts = true
-                                minX = math.min(minX, desc.Position.X)
-                                minY = math.min(minY, desc.Position.Y)
-                                minZ = math.min(minZ, desc.Position.Z)
-                                maxX = math.max(maxX, desc.Position.X)
-                                maxY = math.max(maxY, desc.Position.Y)
-                                maxZ = math.max(maxZ, desc.Position.Z)
+                    local function getCenterFromFolder(folder)
+                        if not folder then return nil end
+                        local parts = {}
+                        for _, v in ipairs(folder:GetDescendants()) do
+                            if v:IsA("BasePart") then
+                                table.insert(parts, v)
                             end
                         end
-
-                        if foundParts then
-                            local centerX = (minX + maxX) / 2
-                            local centerZ = (minZ + maxZ) / 2
-                            local highestY = maxY + 5 -- Drop them from slightly above the highest point
-                            centerCFrame = CFrame.new(centerX, highestY, centerZ)
+                        if #parts > 0 then
+                            return parts[math.floor(#parts/2)].Position
                         end
+                        return nil
                     end
 
-                    if centerCFrame then
-                        root.CFrame = centerCFrame
+                    targetPos = getCenterFromFolder(specificZone:FindFirstChild("POI"))
+                    if not targetPos then
+                        targetPos = getCenterFromFolder(specificZone:FindFirstChild("decor"))
+                    end
+
+                    if targetPos then
+                        -- Tween them to the center to avoid getting stuck in blocks
+                        local tween = TweenService:Create(root, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                            CFrame = CFrame.new(targetPos.X, targetPos.Y + 10, targetPos.Z)
+                        })
+                        tween:Play()
                     end
                 end
             end
@@ -631,7 +689,9 @@ MainTab:CreateToggle({
         if getgenv().AutoBuyZones then
             task.spawn(function()
                 while getgenv().AutoBuyZones do
-                    pcall(function() ZonesRemote:InvokeServer("requestPurchaseZone") end)
+                    pcall(function()
+                        ZonesRemote:InvokeServer("requestPurchaseZone")
+                    end)
                     task.wait(2)
                 end
             end)
@@ -667,7 +727,11 @@ MainTab:CreateInput({
     Flag = "MaxTeleportZone_Save",
     Callback = function(Text)
         local num = tonumber(Text)
-        if num and num >= 0 then getgenv().MaxTeleportZone = num else getgenv().MaxTeleportZone = 0 end
+        if num and num >= 0 then
+            getgenv().MaxTeleportZone = num
+        else
+            getgenv().MaxTeleportZone = 0
+        end
     end,
 })
 
@@ -677,7 +741,11 @@ MainTab:CreateButton({
         pcall(function()
             local targetZone = getTargetZone()
             if targetZone then
-                teleportToZoneCenter(targetZone)
+                if getgenv().CenterTeleport then
+                    teleportToZoneCenter(targetZone)
+                else
+                    ZonesServiceClient:teleportToZone(targetZone)
+                end
             end
         end)
     end,
@@ -694,7 +762,9 @@ MainTab:CreateToggle({
         if getgenv().AutoEquipBest then
             task.spawn(function()
                 while getgenv().AutoEquipBest do
-                    pcall(function() InventoryRemote:InvokeServer("requestEquipBest") end)
+                    pcall(function()
+                        InventoryRemote:InvokeServer("requestEquipBest")
+                    end)
                     task.wait(10)
                 end
             end)
@@ -736,11 +806,13 @@ MainTab:CreateToggle({
                 for k, v in pairs(UpgradeTree) do
                     if type(v) == "table" then
                         if v.cost then
-                            v.id = v.id or k; table.insert(flatUpgrades, v)
+                            v.id = v.id or k
+                            table.insert(flatUpgrades, v)
                         else
                             for subK, subV in pairs(v) do
                                 if type(subV) == "table" and subV.cost then
-                                    subV.id = subV.id or subK; table.insert(flatUpgrades, subV)
+                                    subV.id = subV.id or subK
+                                    table.insert(flatUpgrades, subV)
                                 end
                             end
                         end
@@ -760,12 +832,18 @@ MainTab:CreateToggle({
                             if UpgradeCounterUtils.canPurchase(upg, owned, getCurrencyAmt) then
                                 local success = UpgradeRemote:InvokeServer("requestUnlock", upg.id)
                                 if success then
-                                    boughtSomething = true; task.wait(0.1); owned = upgradesSrc() or {}
+                                    boughtSomething = true
+                                    task.wait(0.1)
+                                    owned = upgradesSrc() or {}
                                 end
                             end
                         end
                     end)
-                    if boughtSomething then task.wait(0.5) else task.wait(2.5) end
+                    if boughtSomething then
+                        task.wait(0.5)
+                    else
+                        task.wait(2.5)
+                    end
                 end
                 pcall(destroyScope)
             end)
@@ -783,13 +861,18 @@ MainTab:CreateToggle({
             task.spawn(function()
                 while getgenv().AutoClaimIndex do
                     pcall(function()
-                        IndexRemote:InvokeServer("requestClaimReward", "basic"); task.wait(1)
-                        IndexRemote:InvokeServer("requestClaimReward", "shiny"); task.wait(1)
-                        IndexRemote:InvokeServer("requestClaimReward", "huge"); task.wait(1)
-                        IndexRemote:InvokeServer("requestClaimReward", "big"); task.wait(1)
-                        IndexRemote:InvokeServer("requestClaimReward", "inverted")
+                        local rewards = {"basic", "shiny", "huge", "big", "inverted"}
+                        for _, reward in ipairs(rewards) do
+                            if not getgenv().AutoClaimIndex then break end
+                            task.spawn(function()
+                                pcall(function()
+                                    IndexRemote:InvokeServer("requestClaimReward", reward)
+                                end)
+                            end)
+                            task.wait(1.5)
+                        end
                     end)
-                    task.wait(30)
+                    task.wait(30) -- Check every 30s to not spam remotes
                 end
             end)
         end
@@ -805,7 +888,9 @@ MainTab:CreateToggle({
         if getgenv().AutoRebirth then
             task.spawn(function()
                 while getgenv().AutoRebirth do
-                    pcall(function() RebirthRemote:InvokeServer("requestRebirth") end)
+                    pcall(function()
+                        RebirthRemote:InvokeServer("requestRebirth")
+                    end)
                     task.wait(3)
                 end
             end)
@@ -829,8 +914,10 @@ ConsumablesTab:CreateToggle({
         if getgenv().AutoUseLuck then
             task.spawn(function()
                 while getgenv().AutoUseLuck do
-                    pcall(function() BoostRemote:InvokeServer("requestUseBoost", "luck") end)
-                    task.wait(15)
+                    pcall(function()
+                        BoostRemote:InvokeServer("requestUseBoost", "luck")
+                    end)
+                    task.wait(15) -- Try using it every 15 seconds (server rejects if active)
                 end
             end)
         end
@@ -846,7 +933,9 @@ ConsumablesTab:CreateToggle({
         if getgenv().AutoUseUltraLuck then
             task.spawn(function()
                 while getgenv().AutoUseUltraLuck do
-                    pcall(function() BoostRemote:InvokeServer("requestUseBoost", "ultraLuck") end)
+                    pcall(function()
+                        BoostRemote:InvokeServer("requestUseBoost", "ultraLuck")
+                    end)
                     task.wait(15)
                 end
             end)
@@ -863,7 +952,9 @@ ConsumablesTab:CreateToggle({
         if getgenv().AutoUseRollSpeed then
             task.spawn(function()
                 while getgenv().AutoUseRollSpeed do
-                    pcall(function() BoostRemote:InvokeServer("requestUseBoost", "rollSpeed") end)
+                    pcall(function()
+                        BoostRemote:InvokeServer("requestUseBoost", "rollSpeed")
+                    end)
                     task.wait(15)
                 end
             end)
@@ -880,7 +971,9 @@ ConsumablesTab:CreateToggle({
         if getgenv().AutoUseCurrency then
             task.spawn(function()
                 while getgenv().AutoUseCurrency do
-                    pcall(function() BoostRemote:InvokeServer("requestUseBoost", "currency") end)
+                    pcall(function()
+                        BoostRemote:InvokeServer("requestUseBoost", "currency")
+                    end)
                     task.wait(15)
                 end
             end)
@@ -907,7 +1000,9 @@ local Recipes = {
 }
 
 local RecipeNames = {}
-for name, _ in pairs(Recipes) do table.insert(RecipeNames, name) end
+for name, _ in pairs(Recipes) do
+    table.insert(RecipeNames, name)
+end
 table.sort(RecipeNames)
 
 CraftingTab:CreateDropdown({
@@ -933,7 +1028,13 @@ CraftingTab:CreateToggle({
                 while getgenv().AutoCraft do
                     pcall(function()
                         if getgenv().SelectedRecipe and getgenv().SelectedRecipe.id and not string.match(getgenv().SelectedRecipe.id, "unknown") then
-                            CraftingRemote:InvokeServer("requestCraftRecipe", getgenv().SelectedRecipe.id, getgenv().SelectedRecipe.ingredients, "24")
+                            local args = {
+                                "requestCraftRecipe",
+                                getgenv().SelectedRecipe.id,
+                                getgenv().SelectedRecipe.ingredients,
+                                "24" 
+                            }
+                            CraftingRemote:InvokeServer(unpack(args))
                         end
                     end)
                     task.wait(getgenv().AutoCraftDelay)
@@ -950,41 +1051,36 @@ CraftingTab:CreateInput({
     Flag = "AutoCraftDelay_Save",
     Callback = function(Text)
         local num = tonumber(Text)
-        if num and num >= 0 then getgenv().AutoCraftDelay = num else getgenv().AutoCraftDelay = 0.025 end
+        if num and num >= 0 then
+            getgenv().AutoCraftDelay = num
+        else
+            getgenv().AutoCraftDelay = 0.025
+        end
     end,
 })
 
 CraftingTab:CreateSection("Auto Recipe Unlocking")
 
-CraftingTab:CreateToggle({
-    Name = "Auto Claim Recipes (Unlocks)",
-    CurrentValue = false,
-    Flag = "AutoClaimRecipes_Flag",
-    Callback = function(Value)
-        getgenv().AutoClaimRecipes = Value
-        if getgenv().AutoClaimRecipes then
-            task.spawn(function()
-                local recipeIds = {"crafty", "thorn", "geode", "slimeSlimeSlime", "puffy", "astro", "sunny", "melly"}
-                while getgenv().AutoClaimRecipes do
-                    pcall(function()
-                        local zonesFolder = workspace:FindFirstChild("Zones")
-                        if zonesFolder then
-                            for _, zone in ipairs(zonesFolder:GetChildren()) do
-                                local recipeObj = zone:FindFirstChild("Recipe")
-                                if recipeObj then
-                                    for _, rId in ipairs(recipeIds) do
-                                        if not getgenv().AutoClaimRecipes then break end
-                                        CraftingRemote:InvokeServer("requestClaimRecipe", rId, recipeObj)
-                                        task.wait(0.2)
-                                    end
-                                end
+CraftingTab:CreateButton({
+    Name = "Claim All Recipes (Unlocks)",
+    Callback = function()
+        task.spawn(function()
+            local recipeIds = {"crafty", "thorn", "geode", "slimeSlimeSlime", "puffy", "astro", "sunny", "melly"}
+            pcall(function()
+                local zonesFolder = workspace:FindFirstChild("Zones")
+                if zonesFolder then
+                    for _, zone in ipairs(zonesFolder:GetChildren()) do
+                        local recipeObj = zone:FindFirstChild("Recipe")
+                        if recipeObj then
+                            for _, rId in ipairs(recipeIds) do
+                                CraftingRemote:InvokeServer("requestClaimRecipe", rId, recipeObj)
+                                task.wait(0.1)
                             end
                         end
-                    end)
-                    task.wait(15) 
+                    end
                 end
             end)
-        end
+        end)
     end,
 })
 
@@ -1034,7 +1130,11 @@ WebhookTab:CreateInput({
     RemoveTextAfterFocusLost = false,
     Flag = "EmbedTitle_Save",
     Callback = function(Text)
-        if Text and Text ~= "" then getgenv().EmbedTitle = Text else getgenv().EmbedTitle = "🎉 Rare Slime Rolled! 🎉" end
+        if Text and Text ~= "" then
+            getgenv().EmbedTitle = Text
+        else
+            getgenv().EmbedTitle = "🎉 Rare Slime Rolled! 🎉"
+        end
     end,
 })
 
@@ -1045,7 +1145,9 @@ WebhookTab:CreateInput({
     Flag = "MinRarity_Save",
     Callback = function(Text)
         local parsed = parseMultiplier(Text)
-        if parsed > 0 then getgenv().MinThreshold = parsed end
+        if parsed > 0 then
+            getgenv().MinThreshold = parsed
+        end
     end,
 })
 WebhookTab:CreateParagraph({Title = "Suffix Help", Content = "Shortcuts supported: k (Thousand), m (Million), b (Billion). Example: '1.5m' becomes 1,500,000."})
@@ -1068,7 +1170,9 @@ WebhookTab:CreateToggle({
     Flag = "StatTracker_Flag",
     Callback = function(Value)
         getgenv().StatTrackerEnabled = Value
-        if Value then startTracker() end
+        if Value then
+            startTracker()
+        end
     end,
 })
 
@@ -1079,7 +1183,11 @@ WebhookTab:CreateInput({
     Flag = "StatTrackerInterval_Save",
     Callback = function(Text)
         local num = tonumber(Text)
-        if num and num > 0 then getgenv().StatTrackerInterval = num else getgenv().StatTrackerInterval = 15 end
+        if num and num > 0 then
+            getgenv().StatTrackerInterval = num
+        else
+            getgenv().StatTrackerInterval = 15
+        end
     end,
 })
 
@@ -1106,9 +1214,9 @@ SettingsTab:CreateButton({
         getgenv().AutoEquipBest = false
         getgenv().AutoBuyUpgrades = false
         getgenv().AutoCraft = false
-        getgenv().AutoClaimRecipes = false
-        getgenv().AutoBuyZones = false
+                getgenv().AutoBuyZones = false
         getgenv().AutoTpZones = false
+getgenv().CenterTeleport = true
         getgenv().AutoRebirth = false
         getgenv().AutoClaimIndex = false
         getgenv().StatTrackerEnabled = false
