@@ -1,0 +1,852 @@
+
+-- Wait for the game to fully load before executing
+repeat task.wait() until game:IsLoaded()
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+
+-- Define the Remotes safely
+local NetworkerRemotes = ReplicatedStorage:WaitForChild("Packages")
+    :WaitForChild("_Index")
+    :WaitForChild("leifstout_networker@0.3.1")
+    :WaitForChild("networker")
+    :WaitForChild("_remotes")
+
+local RollRemote = NetworkerRemotes:WaitForChild("RollService"):WaitForChild("RemoteFunction")
+local LootRemote = NetworkerRemotes:WaitForChild("LootService"):WaitForChild("RemoteFunction")
+local CraftingRemote = NetworkerRemotes:WaitForChild("CraftingService"):WaitForChild("RemoteFunction")
+local ZonesRemote = NetworkerRemotes:WaitForChild("ZonesService"):WaitForChild("RemoteFunction")
+local RebirthRemote = NetworkerRemotes:WaitForChild("RebirthService"):WaitForChild("RemoteFunction")
+
+-- Require the Game Modules
+local LootServiceClient = require(ReplicatedStorage:WaitForChild("Source")
+    :WaitForChild("Features")
+    :WaitForChild("Loot")
+    :WaitForChild("LootServiceClient"))
+
+local SlimesModule = require(ReplicatedStorage:WaitForChild("Source")
+    :WaitForChild("Game")
+    :WaitForChild("Items")
+    :WaitForChild("Slimes"))
+
+local MutationsModule = require(ReplicatedStorage:WaitForChild("Source")
+    :WaitForChild("Features")
+    :WaitForChild("Mutations")
+    :WaitForChild("Mutations"))
+
+local ZonesServiceClient = require(ReplicatedStorage:WaitForChild("Source")
+    :WaitForChild("Features")
+    :WaitForChild("Zones")
+    :WaitForChild("ZonesServiceClient"))
+
+-- Global Flags and Settings
+getgenv().AutoRoll = false
+getgenv().AutoRollDelay = 0.05
+getgenv().AutoPickup = false
+getgenv().AutoCraft = false
+getgenv().AutoCraftDelay = 0.025
+getgenv().AutoBuyZones = false
+getgenv().AutoTpZones = false
+getgenv().MaxTeleportZone = 0 -- 0 means no limit
+getgenv().AutoRebirth = false
+getgenv().SelectedRecipe = nil
+
+getgenv().WebhookURL = ""
+getgenv().StatWebhookURL = "" -- Separate webhook for stats
+getgenv().PingID = "nobody"
+getgenv().MinThreshold = 100000000
+getgenv().EmbedTitle = "🎉 Rare Slime Rolled! 🎉"
+
+getgenv().StatTrackerEnabled = false
+getgenv().StatTrackerInterval = 15 -- 15 minutes default
+
+getgenv().AntiAFK = true
+
+-- Webhook Queue System
+local WebhookQueue = {}
+
+task.spawn(function()
+    while true do
+        if #WebhookQueue > 0 then
+            local nextRoll = table.remove(WebhookQueue, 1)
+            pcall(function()
+                nextRoll.sendFunc()
+            end)
+            task.wait(2.05) -- Strict 2-second rate limit delay between requests to never drop a roll
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
+-- ==============================================
+-- UTILITY FUNCTIONS
+-- ==============================================
+
+local function applyAntiAFK(state)
+    pcall(function()
+        if getconnections then
+            for _, connection in pairs(getconnections(LocalPlayer.Idled)) do
+                if state then
+                    connection:Disable()
+                else
+                    connection:Enable()
+                end
+            end
+        end
+    end)
+
+    pcall(function()
+        local AutoRejoinModule = require(ReplicatedStorage.Source.Features.AutoRejoin.AutoRejoinServiceClient)
+        if type(AutoRejoinModule) == "table" then
+            if state and type(AutoRejoinModule.disable) == "function" then
+                AutoRejoinModule.disable()
+            elseif not state and type(AutoRejoinModule.enable) == "function" then
+                AutoRejoinModule.enable()
+            end
+        end
+    end)
+end
+
+applyAntiAFK(getgenv().AntiAFK)
+
+local function parseMultiplier(str)
+    str = tostring(str):lower():gsub(",", ""):gsub(" ", "")
+    local num = tonumber(str)
+    if num then return num end
+
+    local val, suffix = string.match(str, "^([%d%.]+)([a-zA-Z]+)$")
+    if not val or not suffix then return 0 end
+
+    val = tonumber(val)
+    if not val then return 0 end
+
+    local multipliers = { 
+        k = 1e3, m = 1e6, b = 1e9, t = 1e12, 
+        qa = 1e15, qi = 1e18, sx = 1e21, sp = 1e24, 
+        oc = 1e27, no = 1e30, dc = 1e33, ud = 1e36, 
+        dd = 1e39, td = 1e42, qd = 1e45 
+    }
+
+    local mult = multipliers[suffix]
+    if not mult then
+        return val
+    end
+
+    return val * mult
+end
+
+local function formatNumberSuffix(val)
+    if not val then return "0" end
+    local absVal = math.abs(val)
+    local sign = val < 0 and "-" or ""
+
+    if absVal >= 1e45 then return string.format("%s%.2fQd", sign, absVal / 1e45) end
+    if absVal >= 1e42 then return string.format("%s%.2fTd", sign, absVal / 1e42) end
+    if absVal >= 1e39 then return string.format("%s%.2fDd", sign, absVal / 1e39) end
+    if absVal >= 1e36 then return string.format("%s%.2fUd", sign, absVal / 1e36) end
+    if absVal >= 1e33 then return string.format("%s%.2fDc", sign, absVal / 1e33) end
+    if absVal >= 1e30 then return string.format("%s%.2fNo", sign, absVal / 1e30) end
+    if absVal >= 1e27 then return string.format("%s%.2fOc", sign, absVal / 1e27) end
+    if absVal >= 1e24 then return string.format("%s%.2fSp", sign, absVal / 1e24) end
+    if absVal >= 1e21 then return string.format("%s%.2fSx", sign, absVal / 1e21) end
+    if absVal >= 1e18 then return string.format("%s%.2fQi", sign, absVal / 1e18) end
+    if absVal >= 1e15 then return string.format("%s%.2fQa", sign, absVal / 1e15) end
+    if absVal >= 1e12 then return string.format("%s%.2fT", sign, absVal / 1e12) end
+    if absVal >= 1e9 then return string.format("%s%.2fB", sign, absVal / 1e9) end
+    if absVal >= 1e6 then return string.format("%s%.2fM", sign, absVal / 1e6) end
+    if absVal >= 1e3 then return string.format("%s%.2fK", sign, absVal / 1e3) end
+    return sign .. tostring(math.floor(absVal))
+end
+
+local function formatOdds(oddsValue)
+    if not oddsValue or oddsValue <= 0 then return "Unknown" end
+    local chance = 1 / oddsValue
+    return "1/" .. formatNumberSuffix(chance):gsub("-", "")
+end
+
+local function getRobloxImage(assetIdStr)
+    if not assetIdStr then return nil end
+    local id = string.match(tostring(assetIdStr), "%d+")
+    if not id then return nil end
+    return "https://biggamesapi.io/image/" .. id
+end
+
+local function getTargetZone()
+    local bestZone = ZonesServiceClient:getMaxZone()
+    if not bestZone then return nil end
+
+    if getgenv().MaxTeleportZone > 0 then
+        return math.min(bestZone, getgenv().MaxTeleportZone)
+    end
+    return bestZone
+end
+
+-- ==============================================
+-- COUNTER EXTRACTION & STATS WEBHOOK
+-- ==============================================
+
+local function getCounterText(counterName)
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return 0 end
+
+    local root = playerGui:FindFirstChild("Root")
+    if not root then return 0 end
+
+    local leftSideBar = root:FindFirstChild("LeftSideBar")
+    if not leftSideBar then return 0 end
+
+    local counterStack = leftSideBar:FindFirstChild("CounterStack")
+    if not counterStack then return 0 end
+
+    local counter = counterStack:FindFirstChild(counterName)
+    if not counter then return 0 end
+
+    local textLabel = counter:IsA("TextLabel") and counter or counter:FindFirstChildWhichIsA("TextLabel", true)
+    if not textLabel then return 0 end
+
+    local text = textLabel.Text:gsub(",", ""):gsub(" ", "")
+    local matchStr = string.match(text, "[%d%.]+[a-zA-Z]*")
+    if matchStr then
+        return parseMultiplier(matchStr)
+    end
+    return 0
+end
+
+local function sendStatsWebhook(isInitial, currentCoins, currentGoop, deltaCoins, deltaGoop, minutesPassed)
+    local targetUrl = getgenv().StatWebhookURL ~= "" and getgenv().StatWebhookURL or getgenv().WebhookURL
+    if targetUrl == "" then return end
+
+    -- Generate Discord unix timestamp format for relative time ("X minutes ago")
+    local unixTime = math.floor(os.time())
+    local discordTimestamp = "<t:" .. unixTime .. ":R>"
+
+    local embed = {}
+    if isInitial then
+        embed = {
+            ["title"] = "📊 Stats Tracker Started",
+            ["description"] = "Tracker initialized " .. discordTimestamp,
+            ["color"] = 3447003, -- Blue
+            ["fields"] = {
+                { ["name"] = "🪙 Initial Coins", ["value"] = formatNumberSuffix(currentCoins), ["inline"] = true },
+                { ["name"] = "🧪 Initial Goop", ["value"] = formatNumberSuffix(currentGoop), ["inline"] = true },
+            },
+            ["footer"] = { ["text"] = "Slimeout Tracker • Initializing" }
+        }
+    else
+        local coinsPerMin = deltaCoins / minutesPassed
+        local goopPerMin = deltaGoop / minutesPassed
+        local coinsPerHour = coinsPerMin * 60
+        local goopPerHour = goopPerMin * 60
+
+        embed = {
+            ["title"] = "📈 Stats Update",
+            ["description"] = "Update sent " .. discordTimestamp,
+            ["color"] = 5763719, -- Green
+            ["fields"] = {
+                { ["name"] = "🪙 Coins", ["value"] = formatNumberSuffix(currentCoins), ["inline"] = true },
+                { ["name"] = "💰 Earned", ["value"] = (deltaCoins >= 0 and "+" or "") .. formatNumberSuffix(deltaCoins), ["inline"] = true },
+                { ["name"] = "⚡ Coins/Hr", ["value"] = formatNumberSuffix(coinsPerHour) .. "/h", ["inline"] = true },
+
+                { ["name"] = "🧪 Goop", ["value"] = formatNumberSuffix(currentGoop), ["inline"] = true },
+                { ["name"] = "🦠 Earned", ["value"] = (deltaGoop >= 0 and "+" or "") .. formatNumberSuffix(deltaGoop), ["inline"] = true },
+                { ["name"] = "🫧 Goop/Hr", ["value"] = formatNumberSuffix(goopPerHour) .. "/h", ["inline"] = true },
+            },
+            ["footer"] = { ["text"] = string.format("Slimeout Tracker • Over the last %d minutes", math.floor(minutesPassed)) }
+        }
+    end
+
+    local data = {
+        ["content"] = "", 
+        ["embeds"] = {embed}
+    }
+
+    table.insert(WebhookQueue, {
+        sendFunc = function()
+            local reqFunc = (request or http and http.request or syn and syn.request)
+            if reqFunc then
+                reqFunc({
+                    Url = targetUrl,
+                    Method = "POST",
+                    Headers = {["Content-Type"] = "application/json"},
+                    Body = HttpService:JSONEncode(data)
+                })
+            end
+        end
+    })
+end
+
+local isTrackerRunning = false
+local lastCoins = 0
+local lastGoop = 0
+local lastTick = 0
+
+local function startTracker()
+    if isTrackerRunning then return end
+    isTrackerRunning = true
+    task.spawn(function()
+        task.wait(3) 
+
+        lastCoins = getCounterText("CoinCounter")
+        lastGoop = getCounterText("GoopCounter")
+        lastTick = tick()
+
+        if getgenv().StatTrackerEnabled then
+            sendStatsWebhook(true, lastCoins, lastGoop, 0, 0, 0)
+        end
+
+        while getgenv().StatTrackerEnabled do
+            local targetTime = lastTick + (getgenv().StatTrackerInterval * 60)
+
+            while getgenv().StatTrackerEnabled and tick() < targetTime do
+                task.wait(1)
+            end
+
+            if not getgenv().StatTrackerEnabled then break end
+
+            local currentCoins = getCounterText("CoinCounter")
+            local currentGoop = getCounterText("GoopCounter")
+
+            local elapsedSecs = tick() - lastTick
+            local elapsedMins = elapsedSecs / 60
+
+            local dCoins = currentCoins - lastCoins
+            local dGoop = currentGoop - lastGoop
+
+            if elapsedMins > 0 then
+                sendStatsWebhook(false, currentCoins, currentGoop, dCoins, dGoop, elapsedMins)
+            end
+
+            lastCoins = currentCoins
+            lastGoop = currentGoop
+            lastTick = tick()
+        end
+        isTrackerRunning = false
+    end)
+end
+
+-- ==============================================
+-- ROLL WEBHOOK SENDER
+-- ==============================================
+
+local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, imageId, backupImageId)
+    if getgenv().WebhookURL == "" then return end
+
+    local contentStr = ""
+    if getgenv().PingID ~= "" and getgenv().PingID ~= "nobody" then
+        if getgenv().PingID:lower() == "everyone" then
+            contentStr = "@everyone"
+        else
+            contentStr = "<@" .. getgenv().PingID .. ">"
+        end
+    end
+
+    local titlePrefix = ""
+    local titleSuffix = ""
+    local isMutated = mutationsStr ~= "None"
+
+    if isMutated then
+        local mutLower = mutationsStr:lower()
+        if string.find(mutLower, "inverted") then 
+            titlePrefix = titlePrefix .. "🌌 "
+            titleSuffix = " 🌌" .. titleSuffix 
+        end
+        if string.find(mutLower, "shiny") then 
+            titlePrefix = titlePrefix .. "✨ "
+            titleSuffix = " ✨" .. titleSuffix 
+        end
+        if string.find(mutLower, "huge") then 
+            titlePrefix = titlePrefix .. "🐘 "
+            titleSuffix = " 🐘" .. titleSuffix 
+        end
+        if string.find(mutLower, "big") then 
+            titlePrefix = titlePrefix .. "🦍 "
+            titleSuffix = " 🦍" .. titleSuffix 
+        end
+    end
+
+    local titleMsg = "**" .. titlePrefix .. string.upper(fullName) .. titleSuffix .. "**"
+
+    local embed = {
+        ["title"] = getgenv().EmbedTitle,
+        ["description"] = "You just rolled a " .. titleMsg .. "!",
+        ["color"] = isMutated and 16763904 or 15105570,
+        ["fields"] = {
+            { ["name"] = "Slime", ["value"] = baseName, ["inline"] = true },
+            { ["name"] = "Chance", ["value"] = displayOdds, ["inline"] = true },
+            { ["name"] = "Mutations", ["value"] = mutationsStr, ["inline"] = true }
+        },
+        ["footer"] = { ["text"] = "Auto Roll Logger" }
+    }
+
+    local imgUrl = getRobloxImage(imageId)
+    if not imgUrl and backupImageId then
+        imgUrl = getRobloxImage(backupImageId)
+    end
+
+    if imgUrl then
+        embed["thumbnail"] = { ["url"] = imgUrl }
+    end
+
+    local data = {
+        ["content"] = contentStr,
+        ["embeds"] = {embed}
+    }
+
+    local reqFunc = (request or http and http.request or syn and syn.request)
+    if reqFunc then
+        local response = reqFunc({
+            Url = getgenv().WebhookURL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(data)
+        })
+
+        if response and response.StatusCode == 400 and embed["thumbnail"] then
+            embed["thumbnail"] = nil
+            data.embeds = {embed}
+            reqFunc({
+                Url = getgenv().WebhookURL,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = HttpService:JSONEncode(data)
+            })
+        end
+    end
+end
+
+-- ==============================================
+-- BOOT UP RAYFIELD UI
+-- ==============================================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Glum Slimeout",
+    LoadingTitle = "Sliming the code out...",
+    LoadingSubtitle = "By NVR",
+    ConfigurationSaving = { Enabled = true, FolderName = "RayfieldConfigs", FileName = "MyGameFarmingSave" },
+    Discord = { Enabled = false, Invite = "noinvitelink", RememberJoins = true },
+    KeySystem = false 
+})
+
+-- ================================
+--          FARMING TAB
+-- ================================
+local MainTab = Window:CreateTab("🎲 Gambling")
+
+MainTab:CreateSection("Auto Roll & Loot")
+
+MainTab:CreateToggle({
+    Name = "Auto Roll",
+    CurrentValue = false,
+    Flag = "AutoRoll_Flag",
+    Callback = function(Value)
+        getgenv().AutoRoll = Value
+        if getgenv().AutoRoll then
+            task.spawn(function()
+                while getgenv().AutoRoll do
+                    pcall(function()
+                        local result = RollRemote:InvokeServer("requestRoll")
+
+                        if type(result) == "table" and result[1] and result[1][1] then
+                            local rollData = result[1][1]
+                            local petId = rollData.id or "Unknown"
+                            local activeMutations = rollData.mutations or {}
+
+                            local slimeData = SlimesModule.getSlime(petId)
+                            local baseOdds = slimeData and slimeData.rollOdds or 1
+                            local oddsMultiplier = MutationsModule.getVisualOddsMultiplier(activeMutations)
+
+                            local finalOdds = 1
+                            if baseOdds < 1 then
+                                finalOdds = (1 / baseOdds) * oddsMultiplier
+                            else
+                                finalOdds = baseOdds * oddsMultiplier
+                            end
+
+                            local isMutated = MutationsModule.hasAny(activeMutations)
+                            local mutationsStr = "None"
+
+                            if isMutated then
+                                local mutNames = {}
+                                for _, mutId in ipairs(MutationsModule.getIds(activeMutations)) do
+                                    table.insert(mutNames, MutationsModule.get(mutId).name)
+                                end
+                                mutationsStr = table.concat(mutNames, ", ")
+                            end
+
+                            local displayOdds = formatOdds(1 / finalOdds)
+                            local baseName = slimeData and slimeData.name or petId
+                            local fullName = MutationsModule.getDisplayName(baseName, activeMutations)
+
+                            local targetImageId = slimeData and slimeData.image or nil
+                            if MutationsModule.has(activeMutations, "inverted") then
+                                if slimeData and slimeData.invertedIcon then
+                                    targetImageId = slimeData.invertedIcon
+                                end
+                            end
+
+                            local backupImageId = slimeData and slimeData.image or nil
+
+                            if finalOdds >= getgenv().MinThreshold then
+                                table.insert(WebhookQueue, {
+                                    sendFunc = function()
+                                        sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, targetImageId, backupImageId)
+                                    end
+                                })
+                            end
+                        end
+                    end)
+                    task.wait(getgenv().AutoRollDelay)
+                end
+            end)
+        end
+    end,
+})
+
+MainTab:CreateInput({
+    Name = "Auto Roll Delay (Seconds)",
+    PlaceholderText = "0.05",
+    RemoveTextAfterFocusLost = false,
+    Flag = "AutoRollDelay_Save",
+    Callback = function(Text)
+        local num = tonumber(Text)
+        if num and num >= 0 then
+            getgenv().AutoRollDelay = num
+        else
+            getgenv().AutoRollDelay = 0.05
+        end
+    end,
+})
+
+MainTab:CreateToggle({
+    Name = "Auto Pickup Loot",
+    CurrentValue = false,
+    Flag = "AutoPickup_Flag",
+    Callback = function(Value)
+        getgenv().AutoPickup = Value
+        if getgenv().AutoPickup then
+            task.spawn(function()
+                while getgenv().AutoPickup do
+                    pcall(function()
+                        if LootServiceClient and LootServiceClient.lootById then
+                            for uuid, _ in pairs(LootServiceClient.lootById) do
+                                if not getgenv().AutoPickup then break end
+                                task.spawn(function() LootRemote:InvokeServer("requestCollect", uuid) end)
+                            end
+                        end
+                    end)
+                    task.wait(2.5)
+                end
+            end)
+        end
+    end,
+})
+
+MainTab:CreateSection("Auto Zone Purchasing & Teleport")
+
+local isAutoTpRunning = false
+
+local function startContinuousTeleport()
+    if isAutoTpRunning then return end
+    isAutoTpRunning = true
+
+    task.spawn(function()
+        while getgenv().AutoTpZones do
+            pcall(function()
+                local targetZone = getTargetZone()
+                local currentZone = ZonesServiceClient:getZone()
+
+                if targetZone and currentZone and currentZone ~= targetZone then
+                    ZonesServiceClient:teleportToZone(targetZone)
+                end
+            end)
+            task.wait(5)
+        end
+        isAutoTpRunning = false
+    end)
+end
+
+MainTab:CreateToggle({
+    Name = "Auto Buy Zones",
+    CurrentValue = false,
+    Flag = "AutoBuyZones_Flag",
+    Callback = function(Value)
+        getgenv().AutoBuyZones = Value
+        if getgenv().AutoBuyZones then
+            task.spawn(function()
+                while getgenv().AutoBuyZones do
+                    pcall(function()
+                        ZonesRemote:InvokeServer("requestPurchaseZone")
+                    end)
+                    task.wait(2)
+                end
+            end)
+        end
+    end,
+})
+
+MainTab:CreateToggle({
+    Name = "Auto Teleport To Target Zone",
+    CurrentValue = false,
+    Flag = "AutoTpZones_Flag",
+    Callback = function(Value)
+        getgenv().AutoTpZones = Value
+        if getgenv().AutoTpZones then
+            startContinuousTeleport()
+        end
+    end,
+})
+
+MainTab:CreateInput({
+    Name = "Max Teleport Zone (0 = No Limit)",
+    PlaceholderText = "0",
+    RemoveTextAfterFocusLost = false,
+    Flag = "MaxTeleportZone_Save",
+    Callback = function(Text)
+        local num = tonumber(Text)
+        if num and num >= 0 then
+            getgenv().MaxTeleportZone = num
+        else
+            getgenv().MaxTeleportZone = 0
+        end
+    end,
+})
+
+MainTab:CreateButton({
+    Name = "Force Teleport Now",
+    Callback = function()
+        pcall(function()
+            local targetZone = getTargetZone()
+            if targetZone then
+                ZonesServiceClient:teleportToZone(targetZone)
+            end
+        end)
+    end,
+})
+
+MainTab:CreateSection("Progression")
+
+MainTab:CreateToggle({
+    Name = "Auto Rebirth",
+    CurrentValue = false,
+    Flag = "AutoRebirth_Flag",
+    Callback = function(Value)
+        getgenv().AutoRebirth = Value
+        if getgenv().AutoRebirth then
+            task.spawn(function()
+                while getgenv().AutoRebirth do
+                    pcall(function()
+                        RebirthRemote:InvokeServer("requestRebirth")
+                    end)
+                    task.wait(3)
+                end
+            end)
+        end
+    end,
+})
+
+-- ================================
+--          CRAFTING TAB
+-- ================================
+local CraftingTab = Window:CreateTab("🔨 Crafting")
+CraftingTab:CreateSection("Auto Crafting Options")
+
+local Recipes = {
+    ["Geode"] = {id = "geode", ingredients = {"-ninja", "-guest", "-aegis"}},
+    ["Crafty"] = {id = "crafty", ingredients = {"-lucky", "-rocky", "-mushy"}},
+    ["Thorn"] = {id = "thorn", ingredients = {"-orbit", "-icy", "-stump"}},
+    ["Sunny"] = {id = "sunny", ingredients = {"-pumpkin", "-ouchy", "-ember"}},
+    ["SlimeSlimeSlime"] = {id = "slimeslimeslime", ingredients = {"-slimeslime", "-slimeslime", "-slimeslime"}},
+    ["Puffy"] = {id = "puffy", ingredients = {"-unicorn", "-petal", "-derpy"}},
+    ["Astro"] = {id = "astro", ingredients = {"-ufo", "-blackhole", "-bomber"}},
+}
+
+local RecipeNames = {}
+for name, _ in pairs(Recipes) do
+    table.insert(RecipeNames, name)
+end
+table.sort(RecipeNames)
+
+CraftingTab:CreateDropdown({
+    Name = "Select Recipe",
+    Options = RecipeNames,
+    CurrentOption = "",
+    MultipleOptions = false,
+    Flag = "CraftRecipe_Select",
+    Callback = function(Option)
+        local selectedStr = type(Option) == "table" and Option[1] or Option
+        getgenv().SelectedRecipe = Recipes[selectedStr]
+    end,
+})
+
+CraftingTab:CreateToggle({
+    Name = "Auto Craft",
+    CurrentValue = false,
+    Flag = "AutoCraft_Flag",
+    Callback = function(Value)
+        getgenv().AutoCraft = Value
+        if getgenv().AutoCraft then
+            task.spawn(function()
+                while getgenv().AutoCraft do
+                    pcall(function()
+                        if getgenv().SelectedRecipe and getgenv().SelectedRecipe.id and not string.match(getgenv().SelectedRecipe.id, "unknown") then
+                            local args = {
+                                "requestCraftRecipe",
+                                getgenv().SelectedRecipe.id,
+                                getgenv().SelectedRecipe.ingredients,
+                                "24" 
+                            }
+                            CraftingRemote:InvokeServer(unpack(args))
+                        end
+                    end)
+                    task.wait(getgenv().AutoCraftDelay)
+                end
+            end)
+        end
+    end,
+})
+
+CraftingTab:CreateInput({
+    Name = "Auto Craft Delay (Seconds)",
+    PlaceholderText = "0.025",
+    RemoveTextAfterFocusLost = false,
+    Flag = "AutoCraftDelay_Save",
+    Callback = function(Text)
+        local num = tonumber(Text)
+        if num and num >= 0 then
+            getgenv().AutoCraftDelay = num
+        else
+            getgenv().AutoCraftDelay = 0.025
+        end
+    end,
+})
+
+CraftingTab:CreateSection("⚠️ Ensure you have the required slimes unlocked and in your inventory.")
+
+-- ================================
+--       WEBHOOK SETTINGS TAB
+-- ================================
+local WebhookTab = Window:CreateTab("🔔 Webhook")
+
+WebhookTab:CreateSection("Roll Logger Webhook")
+
+WebhookTab:CreateInput({
+    Name = "Roll Webhook URL",
+    PlaceholderText = "Paste URL here...",
+    RemoveTextAfterFocusLost = false,
+    Flag = "WebhookURL_Save",
+    Callback = function(Text)
+        getgenv().WebhookURL = Text
+    end,
+})
+
+WebhookTab:CreateInput({
+    Name = "Discord User ID to Ping",
+    PlaceholderText = "nobody",
+    RemoveTextAfterFocusLost = false,
+    Flag = "PingID_Save",
+    Callback = function(Text)
+        getgenv().PingID = Text
+    end,
+})
+
+WebhookTab:CreateInput({
+    Name = "Custom Embed Title",
+    PlaceholderText = "🎉 Rare Slime Rolled! 🎉",
+    RemoveTextAfterFocusLost = false,
+    Flag = "EmbedTitle_Save",
+    Callback = function(Text)
+        if Text and Text ~= "" then
+            getgenv().EmbedTitle = Text
+        else
+            getgenv().EmbedTitle = "🎉 Rare Slime Rolled! 🎉"
+        end
+    end,
+})
+
+WebhookTab:CreateInput({
+    Name = "Minimum Rarity Alert",
+    PlaceholderText = "e.g., 10000, 1m, 1b",
+    RemoveTextAfterFocusLost = false,
+    Flag = "MinRarity_Save",
+    Callback = function(Text)
+        local parsed = parseMultiplier(Text)
+        if parsed > 0 then
+            getgenv().MinThreshold = parsed
+        end
+    end,
+})
+WebhookTab:CreateParagraph({Title = "Suffix Help", Content = "Shortcuts supported: k (Thousand), m (Million), b (Billion). Example: '1.5m' becomes 1,500,000."})
+
+WebhookTab:CreateSection("Stat Tracking Webhook")
+
+WebhookTab:CreateInput({
+    Name = "Stat Webhook URL (Optional)",
+    PlaceholderText = "Leave empty to use Roll Webhook...",
+    RemoveTextAfterFocusLost = false,
+    Flag = "StatWebhookURL_Save",
+    Callback = function(Text)
+        getgenv().StatWebhookURL = Text
+    end,
+})
+
+WebhookTab:CreateToggle({
+    Name = "Enable Economy Tracker Webhook",
+    CurrentValue = false,
+    Flag = "StatTracker_Flag",
+    Callback = function(Value)
+        getgenv().StatTrackerEnabled = Value
+        if Value then
+            startTracker()
+        end
+    end,
+})
+
+WebhookTab:CreateInput({
+    Name = "Tracker Update Interval (Minutes)",
+    PlaceholderText = "15",
+    RemoveTextAfterFocusLost = false,
+    Flag = "StatTrackerInterval_Save",
+    Callback = function(Text)
+        local num = tonumber(Text)
+        if num and num > 0 then
+            getgenv().StatTrackerInterval = num
+        else
+            getgenv().StatTrackerInterval = 15
+        end
+    end,
+})
+
+-- ================================
+--        SETTINGS TAB
+-- ================================
+local SettingsTab = Window:CreateTab("⚙️ Settings")
+
+SettingsTab:CreateToggle({
+    Name = "Anti-AFK (Prevent Disconnect)",
+    CurrentValue = true,
+    Flag = "AntiAFK_Flag",
+    Callback = function(Value)
+        getgenv().AntiAFK = Value
+        applyAntiAFK(Value)
+    end,
+})
+
+SettingsTab:CreateButton({
+    Name = "Destroy GUI",
+    Callback = function()
+        getgenv().AutoRoll = false
+        getgenv().AutoPickup = false
+        getgenv().AutoCraft = false
+        getgenv().AutoBuyZones = false
+        getgenv().AutoTpZones = false
+        getgenv().AutoRebirth = false
+        getgenv().StatTrackerEnabled = false
+        Rayfield:Destroy()
+    end,
+})
+
+Rayfield:LoadConfiguration()
