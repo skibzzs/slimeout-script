@@ -20,6 +20,9 @@ local CraftingRemote = NetworkerRemotes:WaitForChild("CraftingService"):WaitForC
 local ZonesRemote = NetworkerRemotes:WaitForChild("ZonesService"):WaitForChild("RemoteFunction")
 local RebirthRemote = NetworkerRemotes:WaitForChild("RebirthService"):WaitForChild("RemoteFunction")
 local InventoryRemote = NetworkerRemotes:WaitForChild("InventoryService"):WaitForChild("RemoteFunction")
+local UpgradeRemote = NetworkerRemotes:WaitForChild("UpgradeService"):WaitForChild("RemoteFunction")
+local IndexRemote = NetworkerRemotes:WaitForChild("IndexService"):WaitForChild("RemoteFunction")
+local BoostRemote = NetworkerRemotes:WaitForChild("BoostService"):WaitForChild("RemoteFunction")
 
 -- Require the Game Modules
 local LootServiceClient = require(ReplicatedStorage:WaitForChild("Source")
@@ -49,17 +52,27 @@ getgenv().AutoPickup = false
 getgenv().AutoEquipBest = false
 getgenv().AutoCraft = false
 getgenv().AutoCraftDelay = 0.025
+getgenv().AutoClaimRecipes = false
 getgenv().AutoBuyZones = false
 getgenv().AutoTpZones = false
 getgenv().MaxTeleportZone = 0 -- 0 means no limit
 getgenv().AutoRebirth = false
+getgenv().AutoBuyUpgrades = false
+getgenv().AutoClaimIndex = false
 getgenv().SelectedRecipe = nil
+
+-- Boosts
+getgenv().AutoUseLuck = false
+getgenv().AutoUseUltraLuck = false
+getgenv().AutoUseRollSpeed = false
+getgenv().AutoUseCurrency = false
 
 getgenv().WebhookURL = ""
 getgenv().StatWebhookURL = "" -- Separate webhook for stats
 getgenv().PingID = "nobody"
 getgenv().MinThreshold = 100000000
 getgenv().EmbedTitle = "🎉 Rare Slime Rolled! 🎉"
+getgenv().ShowUsername = false
 
 getgenv().StatTrackerEnabled = false
 getgenv().StatTrackerInterval = 15 -- 15 minutes default
@@ -104,7 +117,6 @@ local function applyAntiAFK(state)
         local AutoRejoinModule = require(ReplicatedStorage.Source.Features.AutoRejoin.AutoRejoinServiceClient)
         if type(AutoRejoinModule) == "table" then
             if state then
-                -- STRAIGHT UP NUKE IT
                 if not getgenv().OriginalAutoRejoin then
                     getgenv().OriginalAutoRejoin = {}
                     for k, v in pairs(AutoRejoinModule) do
@@ -115,7 +127,6 @@ local function applyAntiAFK(state)
                     end
                 end
             else
-                -- Restore original functionality if user unchecks Anti-AFK
                 if getgenv().OriginalAutoRejoin then
                     for k, v in pairs(getgenv().OriginalAutoRejoin) do
                         AutoRejoinModule[k] = v
@@ -201,65 +212,53 @@ local function getTargetZone()
     return bestZone
 end
 
--- ==============================================
--- COUNTER EXTRACTION & STATS WEBHOOK
--- ==============================================
+-- Used to extract exact roll count without Vide errors if possible, or we will just use the current tracking if valid.
+getgenv().VideScopes = {}
 
-local function getCounterText(counterName)
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not playerGui then return 0 end
-
-    local root = playerGui:FindFirstChild("Root")
-    if not root then return 0 end
-
-    local leftSideBar = root:FindFirstChild("LeftSideBar")
-    if not leftSideBar then return 0 end
-
-    local counterStack = leftSideBar:FindFirstChild("CounterStack")
-    if not counterStack then return 0 end
-
-    local counter = counterStack:FindFirstChild(counterName)
-    if not counter then return 0 end
-
-    local textLabel = counter:IsA("TextLabel") and counter or counter:FindFirstChildWhichIsA("TextLabel", true)
-    if not textLabel then return 0 end
-
-    local text = textLabel.Text:gsub(",", ""):gsub(" ", "")
-    local matchStr = string.match(text, "[%d%.]+[a-zA-Z]*")
-    if matchStr then
-        return parseMultiplier(matchStr)
+-- Helper to safely read from table
+local function safeRead(t, key, default)
+    if type(t) == "table" and t[key] ~= nil then
+        return t[key]
     end
-    return 0
+    return default
 end
 
-local function sendStatsWebhook(isInitial, currentCoins, currentGoop, deltaCoins, deltaGoop, minutesPassed)
+-- ==============================================
+-- STATS WEBHOOK (VIDE FIXED)
+-- ==============================================
+
+local function sendStatsWebhook(isInitial, currentCoins, currentGoop, currentRolls, deltaCoins, deltaGoop, deltaRolls, minutesPassed)
     local targetUrl = getgenv().StatWebhookURL ~= "" and getgenv().StatWebhookURL or getgenv().WebhookURL
     if targetUrl == "" then return end
 
     local unixTime = math.floor(os.time())
     local discordTimestamp = "<t:" .. unixTime .. ":R>"
+    local playerStr = getgenv().ShowUsername and ("||" .. LocalPlayer.Name .. "||") or "Hidden"
 
     local embed = {}
     if isInitial then
         embed = {
             ["title"] = "📊 Stats Tracker Started",
-            ["description"] = "Tracker initialized " .. discordTimestamp,
+            ["description"] = "Tracker initialized " .. discordTimestamp .. "\n👤 **Player:** " .. playerStr,
             ["color"] = 3447003, -- Blue
             ["fields"] = {
                 { ["name"] = "🪙 Initial Coins", ["value"] = formatNumberSuffix(currentCoins), ["inline"] = true },
                 { ["name"] = "🧪 Initial Goop", ["value"] = formatNumberSuffix(currentGoop), ["inline"] = true },
+                { ["name"] = "🎲 Initial Rolls", ["value"] = formatNumberSuffix(currentRolls), ["inline"] = true },
             },
             ["footer"] = { ["text"] = "Slimeout Tracker • Initializing" }
         }
     else
         local coinsPerMin = deltaCoins / minutesPassed
         local goopPerMin = deltaGoop / minutesPassed
+        local rollsPerMin = deltaRolls / minutesPassed
         local coinsPerHour = coinsPerMin * 60
         local goopPerHour = goopPerMin * 60
+        local rollsPerHour = rollsPerMin * 60
 
         embed = {
             ["title"] = "📈 Stats Update",
-            ["description"] = "Update sent " .. discordTimestamp,
+            ["description"] = "Update sent " .. discordTimestamp .. "\n👤 **Player:** " .. playerStr,
             ["color"] = 5763719, -- Green
             ["fields"] = {
                 { ["name"] = "🪙 Coins", ["value"] = formatNumberSuffix(currentCoins), ["inline"] = true },
@@ -269,6 +268,10 @@ local function sendStatsWebhook(isInitial, currentCoins, currentGoop, deltaCoins
                 { ["name"] = "🧪 Goop", ["value"] = formatNumberSuffix(currentGoop), ["inline"] = true },
                 { ["name"] = "🦠 Earned", ["value"] = (deltaGoop >= 0 and "+" or "") .. formatNumberSuffix(deltaGoop), ["inline"] = true },
                 { ["name"] = "🫧 Goop/Hr", ["value"] = formatNumberSuffix(goopPerHour) .. "/h", ["inline"] = true },
+
+                { ["name"] = "🎲 Rolls", ["value"] = formatNumberSuffix(currentRolls), ["inline"] = true },
+                { ["name"] = "🎲 Earned", ["value"] = (deltaRolls >= 0 and "+" or "") .. formatNumberSuffix(deltaRolls), ["inline"] = true },
+                { ["name"] = "🎲 Rolls/Hr", ["value"] = formatNumberSuffix(rollsPerHour) .. "/h", ["inline"] = true },
             },
             ["footer"] = { ["text"] = string.format("Slimeout Tracker • Over the last %d minutes", math.floor(minutesPassed)) }
         }
@@ -297,6 +300,7 @@ end
 local isTrackerRunning = false
 local lastCoins = 0
 local lastGoop = 0
+local lastRolls = 0
 local lastTick = 0
 
 local function startTracker()
@@ -305,12 +309,27 @@ local function startTracker()
     task.spawn(function()
         task.wait(3) 
 
-        lastCoins = getCounterText("CoinCounter")
-        lastGoop = getCounterText("GoopCounter")
+        local vide = require(ReplicatedStorage.Packages.Vide)
+        local getDataSource = require(ReplicatedStorage.Source.Core.UI.Sources.getDataSource)
+
+        local coinsSrc, goopSrc, statsSrc
+
+        local destroyScope = vide.root(function()
+            coinsSrc = getDataSource("coins")
+            goopSrc = getDataSource("goop")
+            statsSrc = getDataSource("stats")
+        end)
+        table.insert(getgenv().VideScopes, destroyScope)
+
+        lastCoins = coinsSrc() or 0
+        lastGoop = goopSrc() or 0
+        local statsTbl = statsSrc()
+        lastRolls = safeRead(statsTbl, "rolls", 0)
+
         lastTick = tick()
 
         if getgenv().StatTrackerEnabled then
-            sendStatsWebhook(true, lastCoins, lastGoop, 0, 0, 0)
+            sendStatsWebhook(true, lastCoins, lastGoop, lastRolls, 0, 0, 0, 0)
         end
 
         while getgenv().StatTrackerEnabled do
@@ -322,23 +341,29 @@ local function startTracker()
 
             if not getgenv().StatTrackerEnabled then break end
 
-            local currentCoins = getCounterText("CoinCounter")
-            local currentGoop = getCounterText("GoopCounter")
+            local currentCoins = coinsSrc() or 0
+            local currentGoop = goopSrc() or 0
+            local currStatsTbl = statsSrc()
+            local currentRolls = safeRead(currStatsTbl, "rolls", 0)
 
             local elapsedSecs = tick() - lastTick
             local elapsedMins = elapsedSecs / 60
 
             local dCoins = currentCoins - lastCoins
             local dGoop = currentGoop - lastGoop
+            local dRolls = currentRolls - lastRolls
 
             if elapsedMins > 0 then
-                sendStatsWebhook(false, currentCoins, currentGoop, dCoins, dGoop, elapsedMins)
+                sendStatsWebhook(false, currentCoins, currentGoop, currentRolls, dCoins, dGoop, dRolls, elapsedMins)
             end
 
             lastCoins = currentCoins
             lastGoop = currentGoop
+            lastRolls = currentRolls
             lastTick = tick()
         end
+
+        pcall(destroyScope)
         isTrackerRunning = false
     end)
 end
@@ -347,7 +372,7 @@ end
 -- ROLL WEBHOOK SENDER
 -- ==============================================
 
-local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, imageId, backupImageId)
+local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, imageId, backupImageId, rollNumber)
     if getgenv().WebhookURL == "" then return end
 
     local contentStr = ""
@@ -384,15 +409,18 @@ local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, im
     end
 
     local titleMsg = "**" .. titlePrefix .. string.upper(fullName) .. titleSuffix .. "**"
+    local playerStr = getgenv().ShowUsername and ("||" .. LocalPlayer.Name .. "||") or "Hidden"
+    local rollStr = formatNumberSuffix(rollNumber)
 
     local embed = {
         ["title"] = getgenv().EmbedTitle,
-        ["description"] = "You just rolled a " .. titleMsg .. "!",
+        ["description"] = "You just rolled a " .. titleMsg .. "!\n👤 **Player:** " .. playerStr,
         ["color"] = isMutated and 16763904 or 15105570,
         ["fields"] = {
             { ["name"] = "Slime", ["value"] = baseName, ["inline"] = true },
             { ["name"] = "Chance", ["value"] = displayOdds, ["inline"] = true },
-            { ["name"] = "Mutations", ["value"] = mutationsStr, ["inline"] = true }
+            { ["name"] = "Mutations", ["value"] = mutationsStr, ["inline"] = true },
+            { ["name"] = "Rolled At", ["value"] = rollStr .. " Rolls", ["inline"] = true }
         },
         ["footer"] = { ["text"] = "Auto Roll Logger" }
     }
@@ -462,6 +490,14 @@ MainTab:CreateToggle({
         getgenv().AutoRoll = Value
         if getgenv().AutoRoll then
             task.spawn(function()
+                local vide = require(ReplicatedStorage.Packages.Vide)
+                local getDataSource = require(ReplicatedStorage.Source.Core.UI.Sources.getDataSource)
+                local statsSrc
+                local destroyScope = vide.root(function()
+                    statsSrc = getDataSource("stats")
+                end)
+                table.insert(getgenv().VideScopes, destroyScope)
+
                 while getgenv().AutoRoll do
                     pcall(function()
                         local result = RollRemote:InvokeServer("requestRoll")
@@ -507,9 +543,15 @@ MainTab:CreateToggle({
                             local backupImageId = slimeData and slimeData.image or nil
 
                             if finalOdds >= getgenv().MinThreshold then
+                                local rollCount = 0
+                                if statsSrc then
+                                    local statsTbl = statsSrc()
+                                    rollCount = safeRead(statsTbl, "rolls", 0)
+                                end
+
                                 table.insert(WebhookQueue, {
                                     sendFunc = function()
-                                        sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, targetImageId, backupImageId)
+                                        sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, targetImageId, backupImageId, rollCount)
                                     end
                                 })
                             end
@@ -517,6 +559,8 @@ MainTab:CreateToggle({
                     end)
                     task.wait(getgenv().AutoRollDelay)
                 end
+
+                pcall(destroyScope)
             end)
         end
     end,
@@ -555,25 +599,6 @@ MainTab:CreateToggle({
                         end
                     end)
                     task.wait(2.5)
-                end
-            end)
-        end
-    end,
-})
-
-MainTab:CreateToggle({
-    Name = "Auto Equip Best Slimes",
-    CurrentValue = false,
-    Flag = "AutoEquipBest_Flag",
-    Callback = function(Value)
-        getgenv().AutoEquipBest = Value
-        if getgenv().AutoEquipBest then
-            task.spawn(function()
-                while getgenv().AutoEquipBest do
-                    pcall(function()
-                        InventoryRemote:InvokeServer("requestEquipBest")
-                    end)
-                    task.wait(10)
                 end
             end)
         end
@@ -665,6 +690,129 @@ MainTab:CreateButton({
 MainTab:CreateSection("Progression")
 
 MainTab:CreateToggle({
+    Name = "Auto Equip Best Slimes",
+    CurrentValue = false,
+    Flag = "AutoEquipBest_Flag",
+    Callback = function(Value)
+        getgenv().AutoEquipBest = Value
+        if getgenv().AutoEquipBest then
+            task.spawn(function()
+                while getgenv().AutoEquipBest do
+                    pcall(function()
+                        InventoryRemote:InvokeServer("requestEquipBest")
+                    end)
+                    task.wait(10)
+                end
+            end)
+        end
+    end,
+})
+
+MainTab:CreateToggle({
+    Name = "Auto Buy Upgrades (Smart)",
+    CurrentValue = false,
+    Flag = "AutoBuyUpgrades_Flag",
+    Callback = function(Value)
+        getgenv().AutoBuyUpgrades = Value
+        if getgenv().AutoBuyUpgrades then
+            task.spawn(function()
+                local vide = require(ReplicatedStorage.Packages.Vide)
+                local UpgradeTree = require(ReplicatedStorage.Source.Features.Upgrades.UpgradeTree)
+                local UpgradeCounterUtils = require(ReplicatedStorage.Source.Features.Upgrades.UpgradeCounterUtils)
+                local getDataSource = require(ReplicatedStorage.Source.Core.UI.Sources.getDataSource)
+
+                local upgradesSrc, coinsSrc, goopSrc, rollCurrencySrc
+
+                local destroyScope = vide.root(function()
+                    upgradesSrc = getDataSource("upgrades")
+                    coinsSrc = getDataSource("coins")
+                    goopSrc = getDataSource("goop")
+                    rollCurrencySrc = getDataSource("rollCurrency")
+                end)
+                table.insert(getgenv().VideScopes, destroyScope)
+
+                local function getCurrencyAmt(curr)
+                    if curr == "coins" then return coinsSrc() or 0 end
+                    if curr == "goop" then return goopSrc() or 0 end
+                    if curr == "rollCurrency" then return rollCurrencySrc() or 0 end
+                    return 0
+                end
+
+                local flatUpgrades = {}
+                for k, v in pairs(UpgradeTree) do
+                    if type(v) == "table" then
+                        if v.cost then
+                            v.id = v.id or k
+                            table.insert(flatUpgrades, v)
+                        else
+                            for subK, subV in pairs(v) do
+                                if type(subV) == "table" and subV.cost then
+                                    subV.id = subV.id or subK
+                                    table.insert(flatUpgrades, subV)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                table.sort(flatUpgrades, function(a, b)
+                    return (tonumber(a.cost.amount) or 0) < (tonumber(b.cost.amount) or 0)
+                end)
+
+                while getgenv().AutoBuyUpgrades do
+                    local boughtSomething = false
+                    pcall(function()
+                        local owned = upgradesSrc() or {}
+                        for _, upg in ipairs(flatUpgrades) do
+                            if not getgenv().AutoBuyUpgrades then break end
+                            if UpgradeCounterUtils.canPurchase(upg, owned, getCurrencyAmt) then
+                                local success = UpgradeRemote:InvokeServer("requestUnlock", upg.id)
+                                if success then
+                                    boughtSomething = true
+                                    task.wait(0.1)
+                                    owned = upgradesSrc() or {}
+                                end
+                            end
+                        end
+                    end)
+                    if boughtSomething then
+                        task.wait(0.5)
+                    else
+                        task.wait(2.5)
+                    end
+                end
+                pcall(destroyScope)
+            end)
+        end
+    end,
+})
+
+MainTab:CreateToggle({
+    Name = "Auto Claim Index",
+    CurrentValue = false,
+    Flag = "AutoClaimIndex_Flag",
+    Callback = function(Value)
+        getgenv().AutoClaimIndex = Value
+        if getgenv().AutoClaimIndex then
+            task.spawn(function()
+                while getgenv().AutoClaimIndex do
+                    pcall(function()
+                        IndexRemote:InvokeServer("requestClaimReward", "basic")
+                        task.wait(1)
+                        IndexRemote:InvokeServer("requestClaimReward", "shiny")
+                        task.wait(1)
+                        IndexRemote:InvokeServer("requestClaimReward", "huge")
+                        task.wait(1)
+                        IndexRemote:InvokeServer("requestClaimReward", "big")
+                    end)
+                    task.wait(30) -- Check every 30s to not spam remotes
+                end
+            end)
+        end
+    end,
+})
+
+MainTab:CreateToggle({
     Name = "Auto Rebirth",
     CurrentValue = false,
     Flag = "AutoRebirth_Flag",
@@ -684,6 +832,90 @@ MainTab:CreateToggle({
 })
 
 -- ================================
+--        CONSUMABLES TAB
+-- ================================
+local ConsumablesTab = Window:CreateTab("🧪 Consumables")
+
+ConsumablesTab:CreateSection("Auto Use Boosts")
+
+ConsumablesTab:CreateToggle({
+    Name = "Auto Use Luck Boost",
+    CurrentValue = false,
+    Flag = "AutoUseLuck_Flag",
+    Callback = function(Value)
+        getgenv().AutoUseLuck = Value
+        if getgenv().AutoUseLuck then
+            task.spawn(function()
+                while getgenv().AutoUseLuck do
+                    pcall(function()
+                        BoostRemote:InvokeServer("requestUseBoost", "luck")
+                    end)
+                    task.wait(15) -- Try using it every 15 seconds (server rejects if active)
+                end
+            end)
+        end
+    end,
+})
+
+ConsumablesTab:CreateToggle({
+    Name = "Auto Use Ultra Luck Boost",
+    CurrentValue = false,
+    Flag = "AutoUseUltraLuck_Flag",
+    Callback = function(Value)
+        getgenv().AutoUseUltraLuck = Value
+        if getgenv().AutoUseUltraLuck then
+            task.spawn(function()
+                while getgenv().AutoUseUltraLuck do
+                    pcall(function()
+                        BoostRemote:InvokeServer("requestUseBoost", "ultraLuck")
+                    end)
+                    task.wait(15)
+                end
+            end)
+        end
+    end,
+})
+
+ConsumablesTab:CreateToggle({
+    Name = "Auto Use Roll Speed Boost",
+    CurrentValue = false,
+    Flag = "AutoUseRollSpeed_Flag",
+    Callback = function(Value)
+        getgenv().AutoUseRollSpeed = Value
+        if getgenv().AutoUseRollSpeed then
+            task.spawn(function()
+                while getgenv().AutoUseRollSpeed do
+                    pcall(function()
+                        BoostRemote:InvokeServer("requestUseBoost", "rollSpeed")
+                    end)
+                    task.wait(15)
+                end
+            end)
+        end
+    end,
+})
+
+ConsumablesTab:CreateToggle({
+    Name = "Auto Use Currency Boost",
+    CurrentValue = false,
+    Flag = "AutoUseCurrency_Flag",
+    Callback = function(Value)
+        getgenv().AutoUseCurrency = Value
+        if getgenv().AutoUseCurrency then
+            task.spawn(function()
+                while getgenv().AutoUseCurrency do
+                    pcall(function()
+                        BoostRemote:InvokeServer("requestUseBoost", "currency")
+                    end)
+                    task.wait(15)
+                end
+            end)
+        end
+    end,
+})
+
+
+-- ================================
 --          CRAFTING TAB
 -- ================================
 local CraftingTab = Window:CreateTab("🔨 Crafting")
@@ -694,9 +926,10 @@ local Recipes = {
     ["Crafty"] = {id = "crafty", ingredients = {"-lucky", "-rocky", "-mushy"}},
     ["Thorn"] = {id = "thorn", ingredients = {"-orbit", "-icy", "-stump"}},
     ["Sunny"] = {id = "sunny", ingredients = {"-pumpkin", "-ouchy", "-ember"}},
-    ["SlimeSlimeSlime"] = {id = "slimeslimeslime", ingredients = {"-slimeslime", "-slimeslime", "-slimeslime"}},
-    ["Puffy"] = {id = "puffy", ingredients = {"-unicorn", "-petal", "-derpy"}},
+    ["SlimeSlimeSlime"] = {id = "slimeSlimeSlime", ingredients = {"-slimeSlime", "-slimeSlime", "-slimeSlime"}},
+    ["Puffy"] = {id = "puffy", ingredients = {"-unicorn", "-flour", "-derpy"}},
     ["Astro"] = {id = "astro", ingredients = {"-ufo", "-blackhole", "-bomber"}},
+    ["Melly"] = {id = "melly", ingredients = {"-monke", "-waxie", "-germy"}},
 }
 
 local RecipeNames = {}
@@ -759,12 +992,59 @@ CraftingTab:CreateInput({
     end,
 })
 
+CraftingTab:CreateSection("Auto Recipe Unlocking")
+
+CraftingTab:CreateToggle({
+    Name = "Auto Claim Recipes (Unlocks)",
+    CurrentValue = false,
+    Flag = "AutoClaimRecipes_Flag",
+    Callback = function(Value)
+        getgenv().AutoClaimRecipes = Value
+        if getgenv().AutoClaimRecipes then
+            task.spawn(function()
+                local recipeIds = {"crafty", "thorn", "geode", "slimeSlimeSlime", "puffy", "astro", "sunny", "melly"}
+                while getgenv().AutoClaimRecipes do
+                    pcall(function()
+                        local zonesFolder = workspace:FindFirstChild("Zones")
+                        if zonesFolder then
+                            -- Since we don't strictly know which zone holds which recipe ID ahead of time without reverse mapping,
+                            -- we can just pass the recipe object we find to the remote. The server verifies it.
+                            for _, zone in ipairs(zonesFolder:GetChildren()) do
+                                local recipeObj = zone:FindFirstChild("Recipe")
+                                if recipeObj then
+                                    for _, rId in ipairs(recipeIds) do
+                                        if not getgenv().AutoClaimRecipes then break end
+                                        CraftingRemote:InvokeServer("requestClaimRecipe", rId, recipeObj)
+                                        task.wait(0.2)
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                    task.wait(15) -- Check for recipes to unlock every 15 seconds
+                end
+            end)
+        end
+    end,
+})
+
 CraftingTab:CreateSection("⚠️ Ensure you have the required slimes unlocked and in your inventory.")
 
 -- ================================
 --       WEBHOOK SETTINGS TAB
 -- ================================
 local WebhookTab = Window:CreateTab("🔔 Webhook")
+
+WebhookTab:CreateSection("General Webhook Settings")
+
+WebhookTab:CreateToggle({
+    Name = "Show Username in Webhooks",
+    CurrentValue = false,
+    Flag = "ShowUsername_Flag",
+    Callback = function(Value)
+        getgenv().ShowUsername = Value
+    end,
+})
 
 WebhookTab:CreateSection("Roll Logger Webhook")
 
@@ -876,11 +1156,25 @@ SettingsTab:CreateButton({
         getgenv().AutoRoll = false
         getgenv().AutoPickup = false
         getgenv().AutoEquipBest = false
+        getgenv().AutoBuyUpgrades = false
         getgenv().AutoCraft = false
+        getgenv().AutoClaimRecipes = false
         getgenv().AutoBuyZones = false
         getgenv().AutoTpZones = false
         getgenv().AutoRebirth = false
+        getgenv().AutoClaimIndex = false
         getgenv().StatTrackerEnabled = false
+
+        getgenv().AutoUseLuck = false
+        getgenv().AutoUseUltraLuck = false
+        getgenv().AutoUseRollSpeed = false
+        getgenv().AutoUseCurrency = false
+
+        for _, scopeDestroy in ipairs(getgenv().VideScopes or {}) do
+            pcall(scopeDestroy)
+        end
+        getgenv().VideScopes = {}
+
         Rayfield:Destroy()
     end,
 })
