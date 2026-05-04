@@ -19,6 +19,7 @@ local LootRemote = NetworkerRemotes:WaitForChild("LootService"):WaitForChild("Re
 local CraftingRemote = NetworkerRemotes:WaitForChild("CraftingService"):WaitForChild("RemoteFunction")
 local ZonesRemote = NetworkerRemotes:WaitForChild("ZonesService"):WaitForChild("RemoteFunction")
 local RebirthRemote = NetworkerRemotes:WaitForChild("RebirthService"):WaitForChild("RemoteFunction")
+local InventoryRemote = NetworkerRemotes:WaitForChild("InventoryService"):WaitForChild("RemoteFunction")
 
 -- Require the Game Modules
 local LootServiceClient = require(ReplicatedStorage:WaitForChild("Source")
@@ -45,6 +46,7 @@ local ZonesServiceClient = require(ReplicatedStorage:WaitForChild("Source")
 getgenv().AutoRoll = false
 getgenv().AutoRollDelay = 0.05
 getgenv().AutoPickup = false
+getgenv().AutoEquipBest = false
 getgenv().AutoCraft = false
 getgenv().AutoCraftDelay = 0.025
 getgenv().AutoBuyZones = false
@@ -103,8 +105,6 @@ local function applyAntiAFK(state)
         if type(AutoRejoinModule) == "table" then
             if state then
                 -- STRAIGHT UP NUKE IT
-                -- We loop through every single function in the auto rejoin module and replace it with an empty function
-                -- This completely destroys the module's ability to run anything in the background
                 if not getgenv().OriginalAutoRejoin then
                     getgenv().OriginalAutoRejoin = {}
                     for k, v in pairs(AutoRejoinModule) do
@@ -561,6 +561,25 @@ MainTab:CreateToggle({
     end,
 })
 
+MainTab:CreateToggle({
+    Name = "Auto Equip Best Slimes",
+    CurrentValue = false,
+    Flag = "AutoEquipBest_Flag",
+    Callback = function(Value)
+        getgenv().AutoEquipBest = Value
+        if getgenv().AutoEquipBest then
+            task.spawn(function()
+                while getgenv().AutoEquipBest do
+                    pcall(function()
+                        InventoryRemote:InvokeServer("requestEquipBest")
+                    end)
+                    task.wait(10)
+                end
+            end)
+        end
+    end,
+})
+
 MainTab:CreateSection("Auto Zone Purchasing & Teleport")
 
 local isAutoTpRunning = false
@@ -856,6 +875,7 @@ SettingsTab:CreateButton({
     Callback = function()
         getgenv().AutoRoll = false
         getgenv().AutoPickup = false
+        getgenv().AutoEquipBest = false
         getgenv().AutoCraft = false
         getgenv().AutoBuyZones = false
         getgenv().AutoTpZones = false
