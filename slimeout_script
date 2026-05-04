@@ -1256,4 +1256,22 @@ getgenv().CenterTeleport = true
     end,
 })
 
+
 Rayfield:LoadConfiguration()
+
+-- ==============================================
+-- INITIALIZATION LOGIC
+-- ==============================================
+task.spawn(function()
+    -- Wait a moment for Rayfield to load saved config and the game to settle
+    task.wait(2)
+    if getgenv().CenterTeleport then
+        pcall(function()
+            local currentZone = ZonesServiceClient:getZone()
+            if currentZone then
+                teleportToZoneCenter(currentZone)
+            end
+        end)
+    end
+end)
+
