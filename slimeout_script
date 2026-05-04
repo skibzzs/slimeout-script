@@ -804,6 +804,8 @@ MainTab:CreateToggle({
                         IndexRemote:InvokeServer("requestClaimReward", "huge")
                         task.wait(1)
                         IndexRemote:InvokeServer("requestClaimReward", "big")
+                        task.wait(1)
+                        IndexRemote:InvokeServer("requestClaimReward", "inverted")
                     end)
                     task.wait(30) -- Check every 30s to not spam remotes
                 end
