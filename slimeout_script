@@ -628,23 +628,44 @@ local function teleportToZoneCenter(targetZoneId)
                 if specificZone then
                     local targetPos = nil
 
-                    local function getCenterFromFolder(folder)
-                        if not folder then return nil end
-                        local parts = {}
-                        for _, v in ipairs(folder:GetDescendants()) do
+                    local function getSpatialCenter(folderOrModel)
+                        if not folderOrModel then return nil end
+
+                        -- If it's a Model, Roblox has a built-in function to get the exact center of its bounding box
+                        if folderOrModel:IsA("Model") then
+                            local cframe, size = folderOrModel:GetBoundingBox()
+                            return cframe.Position
+                        end
+
+                        -- If it's a folder, mathematically calculate the center of all parts inside
+                        local minX, minY, minZ = math.huge, math.huge, math.huge
+                        local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+                        local foundParts = false
+
+                        for _, v in ipairs(folderOrModel:GetDescendants()) do
                             if v:IsA("BasePart") then
-                                table.insert(parts, v)
+                                foundParts = true
+                                minX = math.min(minX, v.Position.X)
+                                minY = math.min(minY, v.Position.Y)
+                                minZ = math.min(minZ, v.Position.Z)
+                                maxX = math.max(maxX, v.Position.X)
+                                maxY = math.max(maxY, v.Position.Y)
+                                maxZ = math.max(maxZ, v.Position.Z)
                             end
                         end
-                        if #parts > 0 then
-                            return parts[math.floor(#parts/2)].Position
+
+                        if foundParts then
+                            return Vector3.new((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2)
                         end
                         return nil
                     end
 
-                    targetPos = getCenterFromFolder(specificZone:FindFirstChild("POI"))
+                    targetPos = getSpatialCenter(specificZone:FindFirstChild("POI"))
                     if not targetPos then
-                        targetPos = getCenterFromFolder(specificZone:FindFirstChild("decor"))
+                        targetPos = getSpatialCenter(specificZone:FindFirstChild("decor"))
+                    end
+                    if not targetPos then
+                        targetPos = getSpatialCenter(specificZone) -- Final fallback to the whole zone
                     end
 
                     if targetPos then
