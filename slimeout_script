@@ -8,11 +8,37 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 
 -- Define the Remotes safely
-local NetworkerRemotes = ReplicatedStorage:WaitForChild("Packages")
-    :WaitForChild("_Index")
-    :WaitForChild("leifstout_networker@0.3.1")
-    :WaitForChild("networker")
-    :WaitForChild("_remotes")
+local function findNetworkerRemotes()
+    local packages = ReplicatedStorage:WaitForChild("Packages")
+    local index = packages:WaitForChild("_Index")
+
+    local networkerPkg = index:FindFirstChild("leifstout_networker@0.3.1")
+    if not networkerPkg then
+        for _, child in ipairs(index:GetChildren()) do
+            if string.match(child.Name, "^leifstout_networker@") then
+                networkerPkg = child
+                break
+            end
+        end
+    end
+
+    if not networkerPkg then
+        warn("Networker package not found, yielding until it exists")
+        while not networkerPkg do
+            task.wait(1)
+            for _, child in ipairs(index:GetChildren()) do
+                if string.match(child.Name, "^leifstout_networker@") then
+                    networkerPkg = child
+                    break
+                end
+            end
+        end
+    end
+
+    return networkerPkg:WaitForChild("networker"):WaitForChild("_remotes")
+end
+
+local NetworkerRemotes = findNetworkerRemotes()
 
 local RollRemote = NetworkerRemotes:WaitForChild("RollService"):WaitForChild("RemoteFunction")
 local LootRemote = NetworkerRemotes:WaitForChild("LootService"):WaitForChild("RemoteFunction")
@@ -1009,22 +1035,48 @@ ConsumablesTab:CreateToggle({
 local CraftingTab = Window:CreateTab("🔨 Crafting")
 CraftingTab:CreateSection("Auto Crafting Options")
 
-local Recipes = {
-    ["Geode"] = {id = "geode", ingredients = {"-ninja", "-guest", "-aegis"}},
-    ["Crafty"] = {id = "crafty", ingredients = {"-lucky", "-rocky", "-mushy"}},
-    ["Thorn"] = {id = "thorn", ingredients = {"-orbit", "-icy", "-stump"}},
-    ["Sunny"] = {id = "sunny", ingredients = {"-pumpkin", "-ouchy", "-ember"}},
-    ["SlimeSlimeSlime"] = {id = "slimeSlimeSlime", ingredients = {"-slimeSlime", "-slimeSlime", "-slimeSlime"}},
-    ["Puffy"] = {id = "puffy", ingredients = {"-unicorn", "-flour", "-derpy"}},
-    ["Astro"] = {id = "astro", ingredients = {"-ufo", "-blackhole", "-bomber"}},
-    ["Melly"] = {id = "melly", ingredients = {"-monke", "-waxie", "-germy"}},
-}
+local CraftingRecipesModule = require(ReplicatedStorage:WaitForChild("Source"):WaitForChild("Features"):WaitForChild("Crafting"):WaitForChild("Recipes"))
 
-local RecipeNames = {}
-for name, _ in pairs(Recipes) do
-    table.insert(RecipeNames, name)
+local function getRawRecipes()
+    if type(CraftingRecipesModule) == "table" and type(CraftingRecipesModule.getRecipes) == "function" then
+        return CraftingRecipesModule.getRecipes()
+    end
+    local recipes = {}
+    for key, value in pairs(CraftingRecipesModule) do
+        if type(value) == "table" and value.id then
+            table.insert(recipes, value)
+        end
+    end
+    return recipes
 end
-table.sort(RecipeNames)
+
+local function buildRecipeCache()
+    local displayToRecipe = {}
+    local options = {}
+    for _, recipe in ipairs(getRawRecipes()) do
+        if not recipe.hidden then
+            local displayName = recipe.outputId or recipe.id
+            local ingredients = {}
+            for _, input in ipairs(recipe.inputs or {}) do
+                table.insert(ingredients, "-" .. input.id)
+            end
+            displayToRecipe[displayName] = {
+                id = recipe.id,
+                outputId = recipe.outputId,
+                ingredients = ingredients,
+                layoutOrder = recipe.layoutOrder or math.huge,
+                description = recipe.description
+            }
+            table.insert(options, displayName)
+        end
+    end
+    table.sort(options, function(a, b)
+        return (displayToRecipe[a].layoutOrder or math.huge) < (displayToRecipe[b].layoutOrder or math.huge)
+    end)
+    return options, displayToRecipe
+end
+
+local RecipeNames, Recipes = buildRecipeCache()
 
 CraftingTab:CreateDropdown({
     Name = "Select Recipe",
@@ -1086,16 +1138,29 @@ CraftingTab:CreateButton({
     Name = "Claim All Recipes (Unlocks)",
     Callback = function()
         task.spawn(function()
-            local recipeIds = {"crafty", "thorn", "geode", "slimeSlimeSlime", "puffy", "astro", "sunny", "melly"}
             pcall(function()
                 local zonesFolder = workspace:FindFirstChild("Zones")
                 if zonesFolder then
+                    local recipeIds = {}
+                    for _, recipe in ipairs(getRawRecipes()) do
+                        if recipe.id then table.insert(recipeIds, recipe.id) end
+                    end
+
                     for _, zone in ipairs(zonesFolder:GetChildren()) do
                         local recipeObj = zone:FindFirstChild("Recipe")
                         if recipeObj then
-                            for _, rId in ipairs(recipeIds) do
-                                CraftingRemote:InvokeServer("requestClaimRecipe", rId, recipeObj)
-                                task.wait(0.1)
+                            local zoneRecipeId = recipeObj:GetAttribute("RecipeId") or recipeObj:GetAttribute("Id") or recipeObj.Name
+                            if table.find(recipeIds, zoneRecipeId) then
+                                pcall(function()
+                                    CraftingRemote:InvokeServer("requestClaimRecipe", zoneRecipeId, recipeObj)
+                                end)
+                            else
+                                for _, rId in ipairs(recipeIds) do
+                                    pcall(function()
+                                        CraftingRemote:InvokeServer("requestClaimRecipe", rId, recipeObj)
+                                    end)
+                                    task.wait(0.1)
+                                end
                             end
                         end
                     end
