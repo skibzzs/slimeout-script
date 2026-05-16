@@ -6,6 +6,9 @@ local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+
 
 -- Define the Remotes safely
 local function findNetworkerRemotes()
@@ -630,6 +633,28 @@ MainTab:CreateToggle({
         end
     end,
 })
+
+MainTab:CreateToggle({
+    Name = "Auto Slime Gun (Screen Hold)",
+    CurrentValue = false,
+    Flag = "AutoSlimeGun_Flag",
+    Callback = function(Value)
+        getgenv().AutoHoldScreen = Value
+        if getgenv().AutoHoldScreen then
+            task.spawn(function()
+                while getgenv().AutoHoldScreen do
+                    if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                        VirtualInputManager:SendMouseButtonEvent(1, 100, 0, true, game, 0)
+                    end
+                    task.wait(0.05)
+                end
+            end)
+        else
+            VirtualInputManager:SendMouseButtonEvent(1, 100, 0, false, game, 0)
+        end
+    end,
+})
+
 
 MainTab:CreateSection("Auto Zone Purchasing & Teleport")
 
