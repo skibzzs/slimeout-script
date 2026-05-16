@@ -1,16 +1,98 @@
 
--- Wait for the game to fully load before executing
+
 repeat task.wait() until game:IsLoaded()
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+
+local DataServiceClient = nil
+local BoostServiceUtils = nil
+local ServerTimeSource = nil
+
+task.spawn(function()
+    pcall(function()
+        local pkgs = ReplicatedStorage:FindFirstChild("Packages")
+        if pkgs then
+            local ds = pkgs:FindFirstChild("DataService")
+            if ds then
+                DataServiceClient = require(ds).client
+            end
+        end
+
+        local src = ReplicatedStorage:FindFirstChild("Source")
+        if src then
+            local feat = src:FindFirstChild("Features")
+            if feat then
+                local boostsF = feat:FindFirstChild("Boosts")
+                if boostsF then
+                    local bsu = boostsF:FindFirstChild("BoostServiceUtils")
+                    if bsu then
+                        BoostServiceUtils = require(bsu)
+                    end
+                end
+            end
+
+            local core = src:FindFirstChild("Core")
+            if core then
+                local ui = core:FindFirstChild("UI")
+                if ui then
+                    local sources = ui:FindFirstChild("Sources")
+                    if sources then
+                        local sts = sources:FindFirstChild("serverTimeSource")
+                        if sts then
+                            ServerTimeSource = require(sts)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end)
+
+local LuckLadderServiceClient = nil
+task.spawn(function()
+    pcall(function()
+        local src = ReplicatedStorage:FindFirstChild("Source")
+        if src then
+            local feat = src:FindFirstChild("Features")
+            if feat then
+                local ll = feat:FindFirstChild("LuckLadder")
+                if ll then
+                    local lls = ll:FindFirstChild("LuckLadderServiceClient")
+                    if lls then
+                        LuckLadderServiceClient = require(lls)
+                        if type(LuckLadderServiceClient) == "table" and type(LuckLadderServiceClient.init) == "function" then
+                            LuckLadderServiceClient.init()
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end)
+
+local function getServerLuckMultiplier()
+    if not LuckLadderServiceClient then return 1 end
+    local mult = 1
+    pcall(function()
+        if type(LuckLadderServiceClient.getCurrentMultiplier) == "function" then
+            mult = LuckLadderServiceClient:getCurrentMultiplier()
+        end
+    end)
+    return mult or 1
+end
+
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 
+local VirtualUser = game:GetService("VirtualUser")
+game:GetService("Players").LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
 
--- Define the Remotes safely
 local function findNetworkerRemotes()
     local packages = ReplicatedStorage:WaitForChild("Packages")
     local index = packages:WaitForChild("_Index")
@@ -53,7 +135,6 @@ local UpgradeRemote = NetworkerRemotes:WaitForChild("UpgradeService"):WaitForChi
 local IndexRemote = NetworkerRemotes:WaitForChild("IndexService"):WaitForChild("RemoteFunction")
 local BoostRemote = NetworkerRemotes:WaitForChild("BoostService"):WaitForChild("RemoteFunction")
 
--- Require the Game Modules
 local LootServiceClient = require(ReplicatedStorage:WaitForChild("Source")
     :WaitForChild("Features")
     :WaitForChild("Loot")
@@ -74,7 +155,6 @@ local ZonesServiceClient = require(ReplicatedStorage:WaitForChild("Source")
     :WaitForChild("Zones")
     :WaitForChild("ZonesServiceClient"))
 
--- Global Flags and Settings
 getgenv().AutoRoll = false
 getgenv().AutoRollDelay = 0.05
 getgenv().AutoPickup = false
@@ -84,31 +164,29 @@ getgenv().AutoCraftDelay = 0.025
 getgenv().AutoBuyZones = false
 getgenv().AutoTpZones = false
 getgenv().CenterTeleport = true
-getgenv().MaxTeleportZone = 0 -- 0 means no limit
+getgenv().MaxTeleportZone = 0
 getgenv().AutoRebirth = false
 getgenv().AutoBuyUpgrades = false
 getgenv().AutoClaimIndex = false
 getgenv().SelectedRecipe = nil
 
--- Boosts
 getgenv().AutoUseLuck = false
 getgenv().AutoUseUltraLuck = false
 getgenv().AutoUseRollSpeed = false
 getgenv().AutoUseCurrency = false
 
 getgenv().WebhookURL = ""
-getgenv().StatWebhookURL = "" -- Separate webhook for stats
+getgenv().StatWebhookURL = ""
 getgenv().PingID = "nobody"
 getgenv().MinThreshold = 100000000
 getgenv().EmbedTitle = "🎉 Rare Slime Rolled! 🎉"
 getgenv().ShowUsername = false
 
 getgenv().StatTrackerEnabled = false
-getgenv().StatTrackerInterval = 15 -- 15 minutes default
+getgenv().StatTrackerInterval = 15
 
 getgenv().AntiAFK = true
 
--- Webhook Queue System
 local WebhookQueue = {}
 
 task.spawn(function()
@@ -118,56 +196,12 @@ task.spawn(function()
             pcall(function()
                 nextRoll.sendFunc()
             end)
-            task.wait(2.05) -- Strict 2-second rate limit delay between requests to never drop a roll
+            task.wait(2.05)
         else
             task.wait(0.1)
         end
     end
 end)
-
--- ==============================================
--- UTILITY FUNCTIONS
--- ==============================================
-
-local function applyAntiAFK(state)
-    pcall(function()
-        if getconnections then
-            for _, connection in pairs(getconnections(LocalPlayer.Idled)) do
-                if state then
-                    connection:Disable()
-                else
-                    connection:Enable()
-                end
-            end
-        end
-    end)
-
-    pcall(function()
-        local AutoRejoinModule = require(ReplicatedStorage.Source.Features.AutoRejoin.AutoRejoinServiceClient)
-        if type(AutoRejoinModule) == "table" then
-            if state then
-                if not getgenv().OriginalAutoRejoin then
-                    getgenv().OriginalAutoRejoin = {}
-                    for k, v in pairs(AutoRejoinModule) do
-                        if type(v) == "function" then
-                            getgenv().OriginalAutoRejoin[k] = v
-                            AutoRejoinModule[k] = function() return end
-                        end
-                    end
-                end
-            else
-                if getgenv().OriginalAutoRejoin then
-                    for k, v in pairs(getgenv().OriginalAutoRejoin) do
-                        AutoRejoinModule[k] = v
-                    end
-                    getgenv().OriginalAutoRejoin = nil
-                end
-            end
-        end
-    end)
-end
-
-applyAntiAFK(getgenv().AntiAFK)
 
 local function parseMultiplier(str)
     if type(str) == "number" then return str end
@@ -238,20 +272,14 @@ local function getTargetZone()
     return bestZone
 end
 
--- Used to extract exact roll count without Vide errors if possible, or we will just use the current tracking if valid.
 getgenv().VideScopes = {}
 
--- Helper to safely read from table
 local function safeRead(t, key, default)
     if type(t) == "table" and t[key] ~= nil then
         return t[key]
     end
     return default
 end
-
--- ==============================================
--- STATS WEBHOOK (VIDE FIXED)
--- ==============================================
 
 local function sendStatsWebhook(isInitial, currentCoins, currentGoop, currentRolls, deltaCoins, deltaGoop, deltaRolls, minutesPassed)
     local targetUrl = getgenv().StatWebhookURL ~= "" and getgenv().StatWebhookURL or getgenv().WebhookURL
@@ -266,7 +294,7 @@ local function sendStatsWebhook(isInitial, currentCoins, currentGoop, currentRol
         embed = {
             ["title"] = "📊 Stats Tracker Started",
             ["description"] = "Tracker initialized " .. discordTimestamp .. "\n👤 **Player:** " .. playerStr,
-            ["color"] = 3447003, -- Blue
+            ["color"] = 3447003,
             ["fields"] = {
                 { ["name"] = "🪙 Initial Coins", ["value"] = formatNumberSuffix(currentCoins), ["inline"] = true },
                 { ["name"] = "🧪 Initial Goop", ["value"] = formatNumberSuffix(currentGoop), ["inline"] = true },
@@ -285,7 +313,7 @@ local function sendStatsWebhook(isInitial, currentCoins, currentGoop, currentRol
         embed = {
             ["title"] = "📈 Stats Update",
             ["description"] = "Update sent " .. discordTimestamp .. "\n👤 **Player:** " .. playerStr,
-            ["color"] = 5763719, -- Green
+            ["color"] = 5763719,
             ["fields"] = {
                 { ["name"] = "🪙 Coins", ["value"] = formatNumberSuffix(currentCoins), ["inline"] = true },
                 { ["name"] = "💰 Earned", ["value"] = (deltaCoins >= 0 and "+" or "") .. formatNumberSuffix(deltaCoins), ["inline"] = true },
@@ -394,11 +422,23 @@ local function startTracker()
     end)
 end
 
--- ==============================================
--- ROLL WEBHOOK SENDER
--- ==============================================
 
-local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, imageId, backupImageId, rollNumber)
+local function formatLuckString(luckValue)
+    local luck = tonumber(luckValue) or 0
+    local suffixes = {"", "k", "m", "b", "t", "qd", "qn", "sx"}
+    local suffixIndex = 1
+    while luck >= 1000 and suffixIndex < #suffixes do
+        luck = luck / 1000
+        suffixIndex = suffixIndex + 1
+    end
+    if suffixIndex == 1 then
+        return "x" .. tostring(math.floor(luck))
+    else
+        return string.format("x%.1f%s", luck, suffixes[suffixIndex])
+    end
+end
+
+local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, imageId, backupImageId, rollNumber, currentLuck)
     if getgenv().WebhookURL == "" then return end
 
     local contentStr = ""
@@ -446,7 +486,8 @@ local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, im
             { ["name"] = "Slime", ["value"] = baseName, ["inline"] = true },
             { ["name"] = "Chance", ["value"] = displayOdds, ["inline"] = true },
             { ["name"] = "Mutations", ["value"] = mutationsStr, ["inline"] = true },
-            { ["name"] = "Rolled At", ["value"] = rollStr .. " Rolls", ["inline"] = true }
+            { ["name"] = "Rolled At", ["value"] = rollStr .. " Rolls", ["inline"] = true },
+            { ["name"] = "Luck", ["value"] = currentLuck or "Unknown", ["inline"] = true }
         },
         ["footer"] = { ["text"] = "Auto Roll Logger" }
     }
@@ -487,9 +528,6 @@ local function sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, im
     end
 end
 
--- ==============================================
--- BOOT UP RAYFIELD UI
--- ==============================================
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
 local Window = Rayfield:CreateWindow({
@@ -501,12 +539,9 @@ local Window = Rayfield:CreateWindow({
     KeySystem = false 
 })
 
--- ================================
---          FARMING TAB
--- ================================
-local MainTab = Window:CreateTab("🎲 Gambling")
+local MainTab = Window:CreateTab("🌾 Farming")
 
-MainTab:CreateSection("Auto Roll & Loot")
+MainTab:CreateSection("Farming")
 
 MainTab:CreateToggle({
     Name = "Auto Roll",
@@ -577,7 +612,10 @@ MainTab:CreateToggle({
 
                                 table.insert(WebhookQueue, {
                                     sendFunc = function()
-                                        sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, targetImageId, backupImageId, rollCount)
+                                        local rollSlice = require(game:GetService("ReplicatedStorage").Source.Features.Roll.RollSlice)
+                                        local currentLuckRaw = rollSlice.luck()
+                                        local currentLuckStr = formatLuckString(currentLuckRaw)
+                                        sendRollWebhook(fullName, baseName, displayOdds, mutationsStr, targetImageId, backupImageId, rollCount, currentLuckStr)
                                     end
                                 })
                             end
@@ -593,8 +631,8 @@ MainTab:CreateToggle({
 })
 
 MainTab:CreateInput({
-    Name = "Auto Roll Delay (Seconds)",
-    PlaceholderText = "0.05",
+    Name = "Roll Cooldown (seconds)",
+    PlaceholderText = "0.067",
     RemoveTextAfterFocusLost = false,
     Flag = "AutoRollDelay_Save",
     Callback = function(Text)
@@ -608,7 +646,7 @@ MainTab:CreateInput({
 })
 
 MainTab:CreateToggle({
-    Name = "Auto Pickup Loot",
+    Name = "Pickup Loot",
     CurrentValue = false,
     Flag = "AutoPickup_Flag",
     Callback = function(Value)
@@ -632,7 +670,7 @@ MainTab:CreateToggle({
 })
 
 MainTab:CreateToggle({
-    Name = "Auto Slime Gun (Screen Hold)",
+    Name = "AFK Slime Gun (disruptive if you wanna use skill tree, etc)",
     CurrentValue = false,
     Flag = "AutoSlimeGun_Flag",
     Callback = function(Value)
@@ -652,8 +690,7 @@ MainTab:CreateToggle({
     end,
 })
 
-
-MainTab:CreateSection("Auto Zone Purchasing & Teleport")
+MainTab:CreateSection("Progression")
 
 local isAutoTpRunning = false
 local TweenService = game:GetService("TweenService")
@@ -663,12 +700,10 @@ local function teleportToZoneCenter(targetZoneId)
     local root = char:FindFirstChild("HumanoidRootPart")
 
     if root then
-        -- First fire the server remote so the game thinks we belong there (prevents anti-cheat checks)
         pcall(function() ZonesServiceClient:teleportToZone(targetZoneId) end)
 
-        -- If Center Teleport is enabled, override the position smoothly after the game loads the zone
-        if getgenv().CenterTeleport then
-            task.wait(0.75) -- Give the game time to finish its own teleport so it doesn't overwrite ours
+        if getgenv().CenterTeleport or getgenv().TeleportMode == "Custom" then
+            task.wait(0.75)
 
             local zoneFolder = workspace:FindFirstChild("Zones")
             if zoneFolder then
@@ -678,18 +713,13 @@ local function teleportToZoneCenter(targetZoneId)
 
                     local function getSpatialCenter(folderOrModel)
                         if not folderOrModel then return nil end
-
-                        -- If it's a Model, Roblox has a built-in function to get the exact center of its bounding box
                         if folderOrModel:IsA("Model") then
                             local cframe, size = folderOrModel:GetBoundingBox()
                             return cframe.Position
                         end
-
-                        -- If it's a folder, mathematically calculate the center of all parts inside
                         local minX, minY, minZ = math.huge, math.huge, math.huge
                         local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
                         local foundParts = false
-
                         for _, v in ipairs(folderOrModel:GetDescendants()) do
                             if v:IsA("BasePart") then
                                 foundParts = true
@@ -701,7 +731,6 @@ local function teleportToZoneCenter(targetZoneId)
                                 maxZ = math.max(maxZ, v.Position.Z)
                             end
                         end
-
                         if foundParts then
                             return Vector3.new((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2)
                         end
@@ -713,11 +742,23 @@ local function teleportToZoneCenter(targetZoneId)
                         targetPos = getSpatialCenter(specificZone:FindFirstChild("decor"))
                     end
                     if not targetPos then
-                        targetPos = getSpatialCenter(specificZone) -- Final fallback to the whole zone
+                        targetPos = getSpatialCenter(specificZone)
                     end
 
-                    if targetPos then
-                        -- Tween them to the center to avoid getting stuck in blocks
+                    if getgenv().TeleportMode == "Custom" and getgenv().CustomPos then
+                        local customPos = getgenv().CustomPos
+                        if targetPos and math.abs(customPos.X - targetPos.X) > 200 then
+                            local tween = TweenService:Create(root, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                                CFrame = CFrame.new(targetPos.X, targetPos.Y + 10, targetPos.Z)
+                            })
+                            tween:Play()
+                        else
+                            local tween = TweenService:Create(root, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                                CFrame = CFrame.new(customPos.X, customPos.Y, customPos.Z)
+                            })
+                            tween:Play()
+                        end
+                    elseif targetPos then
                         local tween = TweenService:Create(root, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
                             CFrame = CFrame.new(targetPos.X, targetPos.Y + 10, targetPos.Z)
                         })
@@ -725,13 +766,6 @@ local function teleportToZoneCenter(targetZoneId)
                     end
                 end
             end
-        elseif getgenv().TeleportMode == "Custom" and getgenv().CustomPos then
-            task.wait(0.75)
-            local customPos = getgenv().CustomPos
-            local tween = TweenService:Create(root, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                CFrame = CFrame.new(customPos.X, customPos.Y, customPos.Z)
-            })
-            tween:Play()
         end
     end
 end
@@ -757,7 +791,7 @@ local function startContinuousTeleport()
 end
 
 MainTab:CreateToggle({
-    Name = "Auto Buy Zones",
+    Name = "Autobuy Areas",
     CurrentValue = false,
     Flag = "AutoBuyZones_Flag",
     Callback = function(Value)
@@ -775,12 +809,12 @@ MainTab:CreateToggle({
     end,
 })
 
--- Setup custom position globals
 getgenv().CustomPos = Vector3.new(7944, 13, -69)
 getgenv().CustomPosText = "7944, 13, -69"
+getgenv().CustomPosZoneId = 0
 
 MainTab:CreateDropdown({
-    Name = "Teleport Position",
+    Name = "Autofarm Position",
     Options = {"Edge of Zone", "Middle of Zone", "Custom Position"},
     CurrentOption = {"Middle of Zone"},
     MultipleOptions = false,
@@ -808,18 +842,20 @@ MainTab:CreateButton({
         local char = game:GetService("Players").LocalPlayer.Character
         if char and char:FindFirstChild("HumanoidRootPart") then
             local pos = char.HumanoidRootPart.Position
-            -- Round coordinates to 1 decimal place for cleaner display
+            local currentZoneId = ZonesServiceClient:getZone() or 1
+
             local px = math.floor(pos.X * 10) / 10
             local py = math.floor(pos.Y * 10) / 10
             local pz = math.floor(pos.Z * 10) / 10
 
             getgenv().CustomPos = pos
+            getgenv().CustomPosZoneId = tonumber(currentZoneId) or 1
             getgenv().CustomPosText = tostring(px) .. ", " .. tostring(py) .. ", " .. tostring(pz)
-            CustomPosLabel:Set("Current Custom Pos: " .. getgenv().CustomPosText)
+            CustomPosLabel:Set("Current Custom Pos: " .. getgenv().CustomPosText .. " (Zone " .. tostring(getgenv().CustomPosZoneId) .. ")")
 
             Rayfield:Notify({
                 Title = "Position Saved!",
-                Content = "Saved: " .. getgenv().CustomPosText,
+                Content = "Saved Pos in Zone " .. tostring(getgenv().CustomPosZoneId),
                 Duration = 3,
                 Image = 4483362458
             })
@@ -828,7 +864,7 @@ MainTab:CreateButton({
 })
 
 MainTab:CreateToggle({
-    Name = "Auto Teleport To Target Zone",
+    Name = "Autofarm At Target Zone",
     CurrentValue = false,
     Flag = "AutoTpZones_Flag",
     Callback = function(Value)
@@ -840,7 +876,7 @@ MainTab:CreateToggle({
 })
 
 MainTab:CreateInput({
-    Name = "Max Teleport Zone (0 = No Limit)",
+    Name = "Teleport Zone (0 = Current Best)",
     PlaceholderText = "0",
     RemoveTextAfterFocusLost = false,
     Flag = "MaxTeleportZone_Save",
@@ -855,21 +891,12 @@ MainTab:CreateInput({
 })
 
 MainTab:CreateButton({
-    Name = "Force Teleport Now",
+    Name = "Teleport To Farming Position",
     Callback = function()
         pcall(function()
-            if getgenv().TeleportMode == "Custom" and getgenv().CustomPos then
-                local char = game:GetService("Players").LocalPlayer.Character or game:GetService("Players").LocalPlayer.CharacterAdded:Wait()
-                local root = char:FindFirstChild("HumanoidRootPart")
-                if root then
-                    root.CFrame = CFrame.new(getgenv().CustomPos.X, getgenv().CustomPos.Y, getgenv().CustomPos.Z)
-                end
-                return
-            end
-
             local targetZone = getTargetZone()
             if targetZone then
-                if getgenv().CenterTeleport then
+                if getgenv().CenterTeleport or getgenv().TeleportMode == "Custom" then
                     teleportToZoneCenter(targetZone)
                 else
                     ZonesServiceClient:teleportToZone(targetZone)
@@ -879,7 +906,7 @@ MainTab:CreateButton({
     end,
 })
 
-MainTab:CreateSection("Progression")
+MainTab:CreateSection("Misc")
 
 MainTab:CreateToggle({
     Name = "Auto Equip Best Slimes",
@@ -893,7 +920,7 @@ MainTab:CreateToggle({
                     pcall(function()
                         InventoryRemote:InvokeServer("requestEquipBest")
                     end)
-                    task.wait(10)
+                    task.wait(60)
                 end
             end)
         end
@@ -901,7 +928,7 @@ MainTab:CreateToggle({
 })
 
 MainTab:CreateToggle({
-    Name = "Auto Buy Upgrades (Smart)",
+    Name = "Auto Skill Tree",
     CurrentValue = false,
     Flag = "AutoBuyUpgrades_Flag",
     Callback = function(Value)
@@ -980,7 +1007,7 @@ MainTab:CreateToggle({
 })
 
 MainTab:CreateToggle({
-    Name = "Auto Claim Index",
+    Name = "Claim Index",
     CurrentValue = false,
     Flag = "AutoClaimIndex_Flag",
     Callback = function(Value)
@@ -997,10 +1024,10 @@ MainTab:CreateToggle({
                                     IndexRemote:InvokeServer("requestClaimReward", reward)
                                 end)
                             end)
-                            task.wait(1.5)
+                            task.wait(1)
                         end
                     end)
-                    task.wait(30) -- Check every 30s to not spam remotes
+                    task.wait(30)
                 end
             end)
         end
@@ -1026,95 +1053,167 @@ MainTab:CreateToggle({
     end,
 })
 
--- ================================
---        CONSUMABLES TAB
--- ================================
 local ConsumablesTab = Window:CreateTab("🧪 Consumables")
 
-ConsumablesTab:CreateSection("Auto Use Boosts")
+ConsumablesTab:CreateSection("Boost Automation")
 
-ConsumablesTab:CreateToggle({
-    Name = "Auto Use Luck Boost",
-    CurrentValue = false,
-    Flag = "AutoUseLuck_Flag",
-    Callback = function(Value)
-        getgenv().AutoUseLuck = Value
-        if getgenv().AutoUseLuck then
-            task.spawn(function()
-                while getgenv().AutoUseLuck do
-                    pcall(function()
-                        BoostRemote:InvokeServer("requestUseBoost", "luck")
-                    end)
-                    task.wait(15) -- Try using it every 15 seconds (server rejects if active)
+local availableBoosts = {"luck", "ultraLuck", "rollSpeed", "currency"}
+pcall(function()
+    local src = ReplicatedStorage:FindFirstChild("Source")
+    if src then
+        local feat = src:FindFirstChild("Features")
+        if feat then
+            local boostsF = feat:FindFirstChild("Boosts")
+            if boostsF then
+                local bm = boostsF:FindFirstChild("Boosts")
+                if bm then
+                    local BoostsModule = require(bm)
+                    if type(BoostsModule) == "table" then
+                        local foundBoosts = {}
+                        for key, val in pairs(BoostsModule) do
+                            if type(val) == "table" and val.id then
+                                table.insert(foundBoosts, val.id)
+                            end
+                        end
+                        if #foundBoosts > 0 then
+                            availableBoosts = foundBoosts
+                        end
+                    end
                 end
-            end)
+            end
+        end
+    end
+end)
+
+ConsumablesTab:CreateDropdown({
+    Name = "Choose Boosts to Use",
+    Options = availableBoosts,
+    CurrentOption = {},
+    MultipleOptions = true,
+    Flag = "SelectedBoosts_Flag",
+    Callback = function(Options)
+        getgenv().SelectedBoosts = Options
+    end,
+})
+
+ConsumablesTab:CreateInput({
+    Name = "Wait Between Uses (Minutes)",
+    PlaceholderText = "15",
+    RemoveTextAfterFocusLost = false,
+    Flag = "BoostInterval_Save",
+    Callback = function(Text)
+        local num = tonumber(Text)
+        if num and num > 0 then
+            getgenv().BoostInterval = num
+        else
+            getgenv().BoostInterval = 15
         end
     end,
 })
 
 ConsumablesTab:CreateToggle({
-    Name = "Auto Use Ultra Luck Boost",
-    CurrentValue = false,
-    Flag = "AutoUseUltraLuck_Flag",
+    Name = "Reapply Instantly on Runout",
+    CurrentValue = true,
+    Flag = "SmartBoost_Flag",
     Callback = function(Value)
-        getgenv().AutoUseUltraLuck = Value
-        if getgenv().AutoUseUltraLuck then
-            task.spawn(function()
-                while getgenv().AutoUseUltraLuck do
-                    pcall(function()
-                        BoostRemote:InvokeServer("requestUseBoost", "ultraLuck")
-                    end)
-                    task.wait(15)
-                end
-            end)
+        getgenv().SmartBoostsEnabled = Value
+    end,
+})
+
+ConsumablesTab:CreateToggle({
+    Name = "Enable Boost Automation",
+    CurrentValue = false,
+    Flag = "AutoBoosts_Flag",
+    Callback = function(Value)
+        getgenv().AutoBoostsEnabled = Value
+        if getgenv().AutoBoostsEnabled then
+            if not getgenv().AutoBoostsRunning then
+                getgenv().AutoBoostsRunning = true
+                task.spawn(function()
+                    local lastBlindBoostTime = 0
+                    while getgenv().AutoBoostsEnabled do
+                        pcall(function()
+                            local isSmart = getgenv().SmartBoostsEnabled
+                            local intervalSeconds = (getgenv().BoostInterval or 15) * 60
+
+                            local canBoost = true
+                            if getgenv().UseBoostsOnlyWithServerLuck then
+                                local currentLuck = getServerLuckMultiplier()
+                                if currentLuck < getgenv().MinServerLuckToBoost then
+                                    canBoost = false
+                                end
+                            end
+
+                            if canBoost and getgenv().SelectedBoosts and #getgenv().SelectedBoosts > 0 then
+                                if isSmart then
+                                    for _, boostName in ipairs(getgenv().SelectedBoosts) do
+                                        pcall(function()
+                                            local isCurrentlyActive = false
+                                            if DataServiceClient and BoostServiceUtils and ServerTimeSource then
+                                                local rawBoosts = DataServiceClient:get("boosts")
+                                                local reconciled = BoostServiceUtils.reconcileBoosts(rawBoosts)
+                                                local boostData = BoostServiceUtils.getBoostData(reconciled, boostName)
+                                                local sTime = ServerTimeSource()
+                                                isCurrentlyActive = BoostServiceUtils.isActive(boostData, sTime)
+                                            end
+
+                                            if not isCurrentlyActive then
+                                                BoostRemote:InvokeServer("requestUseBoost", boostName)
+                                            end
+                                        end)
+                                        task.wait(0.2)
+                                    end
+                                else
+                                    if tick() - lastBlindBoostTime >= intervalSeconds then
+                                        for _, boostName in ipairs(getgenv().SelectedBoosts) do
+                                            pcall(function()
+                                                BoostRemote:InvokeServer("requestUseBoost", boostName)
+                                            end)
+                                            task.wait(0.2)
+                                        end
+                                        lastBlindBoostTime = tick()
+                                    end
+                                end
+                            end
+                        end)
+
+                        task.wait(2)
+                    end
+                    getgenv().AutoBoostsRunning = false
+                end)
+            end
+        else
+            getgenv().AutoBoostsRunning = false
         end
     end,
 })
 
 ConsumablesTab:CreateToggle({
-    Name = "Auto Use Roll Speed Boost",
+    Name = "Use During Server Luck Only",
     CurrentValue = false,
-    Flag = "AutoUseRollSpeed_Flag",
+    Flag = "UseBoostsServerLuck_Flag",
     Callback = function(Value)
-        getgenv().AutoUseRollSpeed = Value
-        if getgenv().AutoUseRollSpeed then
-            task.spawn(function()
-                while getgenv().AutoUseRollSpeed do
-                    pcall(function()
-                        BoostRemote:InvokeServer("requestUseBoost", "rollSpeed")
-                    end)
-                    task.wait(15)
-                end
-            end)
+        getgenv().UseBoostsOnlyWithServerLuck = Value
+    end,
+})
+
+ConsumablesTab:CreateInput({
+    Name = "Minimum Server Luck Multiplier",
+    PlaceholderText = "e.g., 4",
+    RemoveTextAfterFocusLost = false,
+    Flag = "MinServerLuck_Save",
+    Callback = function(Text)
+        local num = tonumber(Text)
+        if num and num > 0 then
+            getgenv().MinServerLuckToBoost = num
+        else
+            getgenv().MinServerLuckToBoost = 4
         end
     end,
 })
 
-ConsumablesTab:CreateToggle({
-    Name = "Auto Use Currency Boost",
-    CurrentValue = false,
-    Flag = "AutoUseCurrency_Flag",
-    Callback = function(Value)
-        getgenv().AutoUseCurrency = Value
-        if getgenv().AutoUseCurrency then
-            task.spawn(function()
-                while getgenv().AutoUseCurrency do
-                    pcall(function()
-                        BoostRemote:InvokeServer("requestUseBoost", "currency")
-                    end)
-                    task.wait(15)
-                end
-            end)
-        end
-    end,
-})
-
-
--- ================================
---          CRAFTING TAB
--- ================================
 local CraftingTab = Window:CreateTab("🔨 Crafting")
-CraftingTab:CreateSection("Auto Crafting Options")
+CraftingTab:CreateSection("Crafting")
 
 local CraftingRecipesModule = require(ReplicatedStorage:WaitForChild("Source"):WaitForChild("Features"):WaitForChild("Crafting"):WaitForChild("Recipes"))
 
@@ -1186,7 +1285,7 @@ CraftingTab:CreateToggle({
                                 "requestCraftRecipe",
                                 getgenv().SelectedRecipe.id,
                                 getgenv().SelectedRecipe.ingredients,
-                                "24" 
+                                "32" 
                             }
                             CraftingRemote:InvokeServer(unpack(args))
                         end
@@ -1216,7 +1315,7 @@ CraftingTab:CreateInput({
 CraftingTab:CreateSection("Auto Recipe Unlocking")
 
 CraftingTab:CreateButton({
-    Name = "Claim All Recipes (Unlocks)",
+    Name = "Claim All Recipes",
     Callback = function()
         task.spawn(function()
             pcall(function()
@@ -1251,11 +1350,8 @@ CraftingTab:CreateButton({
     end,
 })
 
-CraftingTab:CreateSection("⚠️ Ensure you have the required slimes unlocked and in your inventory.")
+CraftingTab:CreateSection("⚠️ Zones with recipes MUST be unlocked!")
 
--- ================================
---       WEBHOOK SETTINGS TAB
--- ================================
 local WebhookTab = Window:CreateTab("🔔 Webhook")
 
 WebhookTab:CreateSection("General Webhook Settings")
@@ -1269,7 +1365,7 @@ WebhookTab:CreateToggle({
     end,
 })
 
-WebhookTab:CreateSection("Roll Logger Webhook")
+WebhookTab:CreateSection("Rolls Webhook")
 
 WebhookTab:CreateInput({
     Name = "Roll Webhook URL",
@@ -1306,7 +1402,7 @@ WebhookTab:CreateInput({
 })
 
 WebhookTab:CreateInput({
-    Name = "Minimum Rarity Alert",
+    Name = "Minimum Rarity",
     PlaceholderText = "e.g., 10000, 1m, 1b",
     RemoveTextAfterFocusLost = false,
     Flag = "MinRarity_Save",
@@ -1317,7 +1413,7 @@ WebhookTab:CreateInput({
         end
     end,
 })
-WebhookTab:CreateParagraph({Title = "Suffix Help", Content = "Shortcuts supported: k (Thousand), m (Million), b (Billion), t (Trillion), qa/qd (Quadrillion), qi (Quintillion), sx (Sextillion), sp (Septillion). Example: '1.5b' becomes 1,500,000,000."})
+WebhookTab:CreateParagraph({Title = "Suffix Help", Content = "Supported suffixes: k, m, b, t, qa, qi, sx, sp"})
 
 WebhookTab:CreateSection("Stat Tracking Webhook")
 
@@ -1358,20 +1454,57 @@ WebhookTab:CreateInput({
     end,
 })
 
--- ================================
---        SETTINGS TAB
--- ================================
 local SettingsTab = Window:CreateTab("⚙️ Settings")
 
-SettingsTab:CreateToggle({
-    Name = "Anti-AFK (Prevent Disconnect)",
-    CurrentValue = true,
-    Flag = "AntiAFK_Flag",
-    Callback = function(Value)
-        getgenv().AntiAFK = Value
-        applyAntiAFK(Value)
+SettingsTab:CreateSection("Player")
+
+SettingsTab:CreateInput({
+    Name = "WalkSpeed",
+    PlaceholderText = "16",
+    RemoveTextAfterFocusLost = false,
+    Flag = "WalkSpeed_Input",
+    Callback = function(Text)
+        local Value = tonumber(Text)
+        if Value then
+            local char = game:GetService("Players").LocalPlayer.Character
+            if char and char:FindFirstChild("Humanoid") then
+                char.Humanoid.WalkSpeed = Value
+            end
+            getgenv().SavedWalkSpeed = Value
+        end
     end,
 })
+
+SettingsTab:CreateInput({
+    Name = "JumpPower",
+    PlaceholderText = "50",
+    RemoveTextAfterFocusLost = false,
+    Flag = "JumpPower_Input",
+    Callback = function(Text)
+        local Value = tonumber(Text)
+        if Value then
+            local char = game:GetService("Players").LocalPlayer.Character
+            if char and char:FindFirstChild("Humanoid") then
+                char.Humanoid.UseJumpPower = true
+                char.Humanoid.JumpPower = Value
+            end
+            getgenv().SavedJumpPower = Value
+        end
+    end,
+})
+
+game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function(char)
+    local humanoid = char:WaitForChild("Humanoid", 5)
+    if humanoid then
+        if getgenv().SavedWalkSpeed and getgenv().SavedWalkSpeed ~= 16 then
+            humanoid.WalkSpeed = getgenv().SavedWalkSpeed
+        end
+        if getgenv().SavedJumpPower and getgenv().SavedJumpPower ~= 50 then
+            humanoid.UseJumpPower = true
+            humanoid.JumpPower = getgenv().SavedJumpPower
+        end
+    end
+end)
 
 SettingsTab:CreateButton({
     Name = "Destroy GUI",
@@ -1402,14 +1535,35 @@ getgenv().CenterTeleport = true
     end,
 })
 
+local LogService = game:GetService("LogService")
 
-Rayfield:LoadConfiguration()
+local function silenceRayfieldWarnings()
+    local oldWarn
+    pcall(function()
+        if hookfunction then
+            oldWarn = hookfunction(warn, function(...)
+                local args = {...}
+                local msg = tostring(args[1])
+                if string.match(msg, "Rayfield | Unable to find") or string.match(msg, "The error above may not be an issue") then
+                    return
+                end
+                return oldWarn(...)
+            end)
+        end
+    end)
 
--- ==============================================
--- INITIALIZATION LOGIC
--- ==============================================
+    Rayfield:LoadConfiguration()
+
+    pcall(function()
+        if hookfunction and oldWarn then
+            hookfunction(warn, oldWarn)
+        end
+    end)
+end
+
+silenceRayfieldWarnings()
+
 task.spawn(function()
-    -- Wait a moment for Rayfield to load saved config and the game to settle
     task.wait(2)
     if getgenv().CenterTeleport then
         pcall(function()
