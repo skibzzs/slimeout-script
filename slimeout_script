@@ -770,18 +770,24 @@ local function teleportToZoneCenter(targetZoneId)
     end
 end
 
+local lastTeleportedZone = nil
+
 local function startContinuousTeleport()
     if isAutoTpRunning then return end
     isAutoTpRunning = true
 
     task.spawn(function()
+        lastTeleportedZone = nil -- Reset on start so it forces teleport at least once
         while getgenv().AutoTpZones do
             pcall(function()
                 local targetZone = getTargetZone()
                 local currentZone = ZonesServiceClient:getZone()
 
-                if targetZone and currentZone and currentZone ~= targetZone then
-                    teleportToZoneCenter(targetZone)
+                if targetZone and currentZone then
+                    if currentZone ~= targetZone or lastTeleportedZone ~= targetZone then
+                        teleportToZoneCenter(targetZone)
+                        lastTeleportedZone = targetZone
+                    end
                 end
             end)
             task.wait(5)
@@ -1096,29 +1102,7 @@ ConsumablesTab:CreateDropdown({
     end,
 })
 
-ConsumablesTab:CreateInput({
-    Name = "Wait Between Uses (Minutes)",
-    PlaceholderText = "15",
-    RemoveTextAfterFocusLost = false,
-    Flag = "BoostInterval_Save",
-    Callback = function(Text)
-        local num = tonumber(Text)
-        if num and num > 0 then
-            getgenv().BoostInterval = num
-        else
-            getgenv().BoostInterval = 15
-        end
-    end,
-})
 
-ConsumablesTab:CreateToggle({
-    Name = "Reapply Instantly on Runout",
-    CurrentValue = true,
-    Flag = "SmartBoost_Flag",
-    Callback = function(Value)
-        getgenv().SmartBoostsEnabled = Value
-    end,
-})
 
 ConsumablesTab:CreateToggle({
     Name = "Enable Boost Automation",
@@ -1130,12 +1114,8 @@ ConsumablesTab:CreateToggle({
             if not getgenv().AutoBoostsRunning then
                 getgenv().AutoBoostsRunning = true
                 task.spawn(function()
-                    local lastBlindBoostTime = 0
                     while getgenv().AutoBoostsEnabled do
                         pcall(function()
-                            local isSmart = getgenv().SmartBoostsEnabled
-                            local intervalSeconds = (getgenv().BoostInterval or 15) * 60
-
                             local canBoost = true
                             if getgenv().UseBoostsOnlyWithServerLuck then
                                 local currentLuck = getServerLuckMultiplier()
@@ -1145,38 +1125,31 @@ ConsumablesTab:CreateToggle({
                             end
 
                             if canBoost and getgenv().SelectedBoosts and #getgenv().SelectedBoosts > 0 then
-                                if isSmart then
-                                    for _, boostName in ipairs(getgenv().SelectedBoosts) do
-                                        pcall(function()
-                                            local isCurrentlyActive = false
-                                            if DataServiceClient and BoostServiceUtils and ServerTimeSource then
-                                                local rawBoosts = DataServiceClient:get("boosts")
+                                for _, boostName in ipairs(getgenv().SelectedBoosts) do
+                                    pcall(function()
+                                        local isCurrentlyActive = true -- Default to true to prevent accidental usage on load/error
+                                        local readSuccess = false
+
+                                        if DataServiceClient and BoostServiceUtils and ServerTimeSource then
+                                            local rawBoosts = DataServiceClient:get("boosts")
+                                            if rawBoosts then
                                                 local reconciled = BoostServiceUtils.reconcileBoosts(rawBoosts)
                                                 local boostData = BoostServiceUtils.getBoostData(reconciled, boostName)
                                                 local sTime = ServerTimeSource()
                                                 isCurrentlyActive = BoostServiceUtils.isActive(boostData, sTime)
+                                                readSuccess = true
                                             end
-
-                                            if not isCurrentlyActive then
-                                                BoostRemote:InvokeServer("requestUseBoost", boostName)
-                                            end
-                                        end)
-                                        task.wait(0.2)
-                                    end
-                                else
-                                    if tick() - lastBlindBoostTime >= intervalSeconds then
-                                        for _, boostName in ipairs(getgenv().SelectedBoosts) do
-                                            pcall(function()
-                                                BoostRemote:InvokeServer("requestUseBoost", boostName)
-                                            end)
-                                            task.wait(0.2)
                                         end
-                                        lastBlindBoostTime = tick()
-                                    end
+
+                                        -- Only attempt to use if we successfully verified it's strictly false
+                                        if readSuccess and not isCurrentlyActive then
+                                            BoostRemote:InvokeServer("requestUseBoost", boostName)
+                                        end
+                                    end)
+                                    task.wait(0.2)
                                 end
                             end
                         end)
-
                         task.wait(2)
                     end
                     getgenv().AutoBoostsRunning = false
