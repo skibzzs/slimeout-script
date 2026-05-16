@@ -170,27 +170,24 @@ end
 applyAntiAFK(getgenv().AntiAFK)
 
 local function parseMultiplier(str)
-    str = tostring(str):lower():gsub(",", ""):gsub(" ", "")
+    if type(str) == "number" then return str end
+    str = string.lower(string.gsub(tostring(str), " ", ""))
+
     local num = tonumber(str)
     if num then return num end
 
-    local val, suffix = string.match(str, "^([%d%.]+)([a-zA-Z]+)$")
+    local val, suffix = string.match(str, "^([%d%.]+)([a-z]+)$")
     if not val or not suffix then return 0 end
 
     val = tonumber(val)
     if not val then return 0 end
 
     local multipliers = { 
-        k = 1e3, m = 1e6, b = 1e9, t = 1e12, 
-        qa = 1e15, qi = 1e18, sx = 1e21, sp = 1e24, 
-        oc = 1e27, no = 1e30, dc = 1e33, ud = 1e36, 
-        dd = 1e39, td = 1e42, qd = 1e45 
+        k = 1e3, m = 1e6, b = 1e9, t = 1e12, qa = 1e15, qd = 1e15, qi = 1e18, sx = 1e21, sp = 1e24, oc = 1e27, no = 1e30, dc = 1e33
     }
 
     local mult = multipliers[suffix]
-    if not mult then
-        return val
-    end
+    if not mult then return val end
 
     return val * mult
 end
@@ -728,6 +725,13 @@ local function teleportToZoneCenter(targetZoneId)
                     end
                 end
             end
+        elseif getgenv().TeleportMode == "Custom" and getgenv().CustomPos then
+            task.wait(0.75)
+            local customPos = getgenv().CustomPos
+            local tween = TweenService:Create(root, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                CFrame = CFrame.new(customPos.X, customPos.Y, customPos.Z)
+            })
+            tween:Play()
         end
     end
 end
@@ -771,12 +775,55 @@ MainTab:CreateToggle({
     end,
 })
 
-MainTab:CreateToggle({
-    Name = "Teleport to Middle of Zone",
-    CurrentValue = true,
-    Flag = "CenterTeleport_Flag",
-    Callback = function(Value)
-        getgenv().CenterTeleport = Value
+-- Setup custom position globals
+getgenv().CustomPos = Vector3.new(7944, 13, -69)
+getgenv().CustomPosText = "7944, 13, -69"
+
+MainTab:CreateDropdown({
+    Name = "Teleport Position",
+    Options = {"Edge of Zone", "Middle of Zone", "Custom Position"},
+    CurrentOption = {"Middle of Zone"},
+    MultipleOptions = false,
+    Flag = "TeleportMode_Flag",
+    Callback = function(Options)
+        local selection = Options[1]
+        if selection == "Middle of Zone" then
+            getgenv().TeleportMode = "Middle"
+            getgenv().CenterTeleport = true
+        elseif selection == "Custom Position" then
+            getgenv().TeleportMode = "Custom"
+            getgenv().CenterTeleport = false
+        else
+            getgenv().TeleportMode = "Edge"
+            getgenv().CenterTeleport = false
+        end
+    end,
+})
+
+local CustomPosLabel = MainTab:CreateLabel("Current Custom Pos: " .. getgenv().CustomPosText)
+
+MainTab:CreateButton({
+    Name = "Save Current Position",
+    Callback = function()
+        local char = game:GetService("Players").LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local pos = char.HumanoidRootPart.Position
+            -- Round coordinates to 1 decimal place for cleaner display
+            local px = math.floor(pos.X * 10) / 10
+            local py = math.floor(pos.Y * 10) / 10
+            local pz = math.floor(pos.Z * 10) / 10
+
+            getgenv().CustomPos = pos
+            getgenv().CustomPosText = tostring(px) .. ", " .. tostring(py) .. ", " .. tostring(pz)
+            CustomPosLabel:Set("Current Custom Pos: " .. getgenv().CustomPosText)
+
+            Rayfield:Notify({
+                Title = "Position Saved!",
+                Content = "Saved: " .. getgenv().CustomPosText,
+                Duration = 3,
+                Image = 4483362458
+            })
+        end
     end,
 })
 
@@ -811,6 +858,15 @@ MainTab:CreateButton({
     Name = "Force Teleport Now",
     Callback = function()
         pcall(function()
+            if getgenv().TeleportMode == "Custom" and getgenv().CustomPos then
+                local char = game:GetService("Players").LocalPlayer.Character or game:GetService("Players").LocalPlayer.CharacterAdded:Wait()
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root then
+                    root.CFrame = CFrame.new(getgenv().CustomPos.X, getgenv().CustomPos.Y, getgenv().CustomPos.Z)
+                end
+                return
+            end
+
             local targetZone = getTargetZone()
             if targetZone then
                 if getgenv().CenterTeleport then
@@ -1261,7 +1317,7 @@ WebhookTab:CreateInput({
         end
     end,
 })
-WebhookTab:CreateParagraph({Title = "Suffix Help", Content = "Shortcuts supported: k (Thousand), m (Million), b (Billion). Example: '1.5m' becomes 1,500,000."})
+WebhookTab:CreateParagraph({Title = "Suffix Help", Content = "Shortcuts supported: k (Thousand), m (Million), b (Billion), t (Trillion), qa/qd (Quadrillion), qi (Quintillion), sx (Sextillion), sp (Septillion). Example: '1.5b' becomes 1,500,000,000."})
 
 WebhookTab:CreateSection("Stat Tracking Webhook")
 
