@@ -87,11 +87,51 @@ end
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 
-local VirtualUser = game:GetService("VirtualUser")
-game:GetService("Players").LocalPlayer.Idled:Connect(function()
-    VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(Vector2.new())
+-- Nuke AutoRejoinService to prevent unwanted automatic server hoppers/rejoins
+pcall(function()
+    local autoRejoinClient = game:GetService("ReplicatedStorage"):FindFirstChild("Source")
+    if autoRejoinClient then
+        local features = autoRejoinClient:FindFirstChild("Features")
+        if features then
+            local autoRejoinDir = features:FindFirstChild("AutoRejoin")
+            if autoRejoinDir then autoRejoinDir:Destroy() end
+        end
+    end
 end)
+
+pcall(function()
+    local indexFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Packages")
+    if indexFolder then
+        local _index = indexFolder:FindFirstChild("_Index")
+        if _index then
+            for _, child in ipairs(_index:GetChildren()) do
+                if string.find(child.Name, "networker") then
+                    local networker = child:FindFirstChild("networker")
+                    if networker then
+                        local remotes = networker:FindFirstChild("_remotes")
+                        if remotes then
+                            local arService = remotes:FindFirstChild("AutoRejoinService")
+                            if arService then arService:Destroy() end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+if getconnections then
+    for _, v in ipairs(getconnections(game:GetService("Players").LocalPlayer.Idled)) do
+        v:Disable()
+    end
+else
+    local VirtualUser = game:GetService("VirtualUser")
+    game:GetService("Players").LocalPlayer.Idled:Connect(function()
+        VirtualUser:Button2Down(Vector2.new(0,0),workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0,0),workspace.CurrentCamera.CFrame)
+    end)
+end
 
 local function findNetworkerRemotes()
     local packages = ReplicatedStorage:WaitForChild("Packages")
